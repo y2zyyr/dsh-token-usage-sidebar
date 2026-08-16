@@ -1,118 +1,46 @@
 // src/index.ts
-// Host half of dsh-token-usage-sidebar.
+// Host half of dsh-token-usage-sidebar (v1.1 — scalable durable ledger).
 //
 //   Authoritative source : durable session-log events assistant/message.usage
 //                          and assistant/chunk{type:'usage'}.usage
 //                          (exactly-once, framework-committed, restart-safe).
 //   Exactly-once         : a (sessionId, turn, step) invocation is recorded at
 //                          its final authoritative total once; replays/retries
-//                          are ignored by the ledger's byId dedup.
-//   Persistence          : domain-KV ledger (ctx.storageDomain), atomic
-//                          ~/.dsh/storages/<unit>.json, versioned.
+//                          are ignored (higher-seq wins on conflict).
+//   Persistence          : plugin-owned SQLite ledger (node:sqlite, WAL).
+//                          usage_records = source of truth; aggregate_* =
+//                          derived rebuildable cache. Writes are O(1)-ish per
+//                          invocation regardless of lifetime history size.
+//   Migration            : v1.0.1 root-JSON ledger is migrated automatically
+//                          and VERIFIED before cutover (see
+//                          docs/migrations/v1.0.1-to-v1.1.0.md).
 //   Client channel       : POST /token-usage/api/summary (browser-trust fence).
 //
 import type { Context } from '@deepseek-ai/cordis';
-import { defineDomain, domainTable, type Domain } from '@deepseek-ai/dsh-storage-domain';
 import { z } from 'zod';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
-  UsageAggregator,
-} from './usage/aggregator';
-import { collectSessionUsage, type SessionEventLike } from './usage/collector';
-import { currentLocalDate } from './usage/types';
-import { totalForOffset } from './usage/ledger';
-import type { InsightRange } from './usage/insights';
-import type { UsageStore, LedgerState } from './usage/store';
+  DurableStore,
+} from './usage/durable/durableStore.ts';
+import {
+  DurableAggregator,
+} from './usage/durable/durableAggregator.ts';
+import {
+  migrateV1Ledger,
+  readV1Root,
+  type MigrationResult,
+} from './usage/durable/migration.ts';
+import { collectSessionUsage, type SessionEventLike } from './usage/collector.ts';
+import { defaultDbPath, ensureDbDir, DB_FILE_NAME } from './usage/durable/wrapper.ts';
+import type { InsightRange } from './usage/insights.ts';
 
 export const name = 'dsh-token-usage-sidebar';
 
-/** Services required to mount.
- * sessionPersistence lets us enumerate/read ALL persisted session logs the
- * DSH-blessed way (multi-frame zstd, cold/archived included). */
-export const inject = ['webServer', 'sessions', 'storageDomain', 'webRuntime', 'sessionPersistence'];
+/** Services required to mount. */
+export const inject = ['webServer', 'sessions', 'webRuntime'];
 
-// ── durable ledger domain ──────────────────────────────────────────────────
-const LedgerSchema = z.object({
-  lifetimeTotal: z.number().int().nonnegative(),
-  todayTotal: z.number().int().nonnegative(),
-  todayDate: z.string(),
-  byId: z.record(z.string(), z.number().int().nonnegative()),
-  recordCount: z.number().int().nonnegative(),
-  src: z.record(z.string(), z.enum(['live_event','session_log','provider_record','legacy_store','other'])).optional(),
-  liveRecordedTotal: z.number().int().nonnegative().optional(),
-  historicalRecoveredTotal: z.number().int().nonnegative().optional(),
-  historicalRecoveredRecordCount: z.number().int().nonnegative().optional(),
-  schemaVersion: z.number().int().nonnegative().optional(),
-  // Per-record fields are optional for backwards-compatible v0.1/v0.2 reads.
-  // They must be part of the domain schema, though: Zod strips unknown keys
-  // before storage and an omitted declaration would lose daily accounting on
-  // every restart.
-  dayBy: z.record(z.string(), z.string()).optional(),
-  seqBy: z.record(z.string(), z.number().int().nonnegative()).optional(),
-  detailBy: z.record(z.string(), z.object({
-    inputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-    cacheReadTokens: z.number().int().nonnegative(),
-    cacheWriteTokens: z.number().int().nonnegative(),
-    reasoningTokens: z.number().int().nonnegative(),
-    provider: z.string().optional(),
-    model: z.string().optional(),
-  })).optional(),
-  recovery: z.object({
-    trackingStartDate: z.string().optional(),
-    earliestRecoveredAt: z.number().optional(),
-    latestRecoveredAt: z.number().optional(),
-    recoveryVersion: z.number().optional(),
-    recoveryCompletedAt: z.number().optional(),
-    recoverySources: z.array(z.string()).optional(),
-    recoveredRecordCount: z.number().optional(),
-    sourceScanStatus: z.enum(['complete','partial','failed','unknown']).optional(),
-    recoveryStatus: z.enum(['complete','partial','unknown']).optional(),
-    sessionsDiscovered: z.number().int().nonnegative().optional(),
-    sessionsReadSuccessfully: z.number().int().nonnegative().optional(),
-    sessionsReadFailed: z.number().int().nonnegative().optional(),
-  }).optional(),
-});
-
-const ledgerSpec = defineDomain({
-  name: 'dsh_token_usage_sidebar',
-  version: 1,
-  tables: {
-    ledger: domainTable<never, z.infer<typeof LedgerSchema>>(LedgerSchema),
-  },
-});
-
-type LedgerTable = ReturnType<Domain<typeof ledgerSpec>['table']>;
-
-class DomainLedgerStore implements UsageStore {
-  private table: LedgerTable | undefined;
-  private domain: Domain<typeof ledgerSpec> | undefined;
-  private key = 'root';
-
-  async open(facility: { open(s: typeof ledgerSpec): Promise<Domain<typeof ledgerSpec>> }): Promise<void> {
-    this.domain = await facility.open(ledgerSpec);
-    this.table = this.domain.table('ledger');
-  }
-  async load(): Promise<{ status: 'none' } | { status: 'ok'; ledger: LedgerState } | { status: 'invalid' }> {
-    const row = this.table?.get(this.key);
-    if (!row) return { status: 'none' };
-    const parsed = LedgerSchema.safeParse(row);
-    if (!parsed.success) {
-      // Corrupt/invalid persisted ledger: signal 'invalid' so the aggregator can
-      // warn + fail closed instead of silently resetting the totals to zero.
-      return { status: 'invalid' };
-    }
-    return { status: 'ok', ledger: parsed.data as unknown as LedgerState };
-  }
-  async save(ledger: LedgerState): Promise<void> {
-    if (!this.table) throw new Error('ledger domain not open');
-    await this.table.put(this.key, ledger);
-  }
-  async close(): Promise<void> {
-    if (this.domain) await (this.domain as unknown as { close?(): Promise<void> }).close?.();
-  }
-}
-
-// ── browser-trust fence (behavior-identical to the /api gateway fence) ─────
+// ── browser-trust fence (behavior-identical to the v1.0.1 gateway fence) ──
 function isLoopbackHostname(hostname: string): boolean {
   if (hostname === 'localhost' || hostname === '[::1]') return true;
   const parts = hostname.split('.');
@@ -170,63 +98,76 @@ async function readJsonBody(req: any): Promise<unknown> {
     return {};
   }
 }
-
 function insightRangeOf(body: unknown): InsightRange | undefined {
   const range = body && typeof body === 'object' ? (body as { range?: unknown }).range : undefined;
   return range === 'today' || range === 'yesterday' || range === '7d' || range === 'all' ? range : undefined;
 }
 
+/** Migration source is the v1 (or no) JSON ledger that shared the storages dir. */
+function v1LedgerPath(dbPath: string): string {
+  return join(dirname(dbPath), 'dsh_token_usage_sidebar.json');
+}
+
+/** Services this plugin injects onto the cordis Context at runtime. */
+interface HostCtx {
+  sessions: { list(): Array<{ id: string; events?: readonly SessionEventLike[] }> };
+  webRuntime: { trustedHosts?: unknown };
+  webServer: { register(opts: unknown): unknown };
+  on(event: string, listener: (session: unknown, event: SessionEventLike) => void): void;
+  logger?: { warn?: (...args: unknown[]) => void };
+  effect(fn: () => (() => void) | void, id?: string): unknown;
+}
+
 export function apply(ctx: Context): void {
-  const store = new DomainLedgerStore();
-  // Historical reader backed by DSH session-persistence: list() enumerates every
-  // persisted session (cold/archived included); readEvents() decodes the durable
-  // log correctly (multi-frame zstd) via readFrom(id, 0).
-  const historicalReader = {
-    async list(): Promise<Array<{ id: string }>> {
-      try {
-        const headers = await (ctx.sessionPersistence as any).list();
-        return Array.isArray(headers)
-          ? headers.map((h: any) => ({ id: String(h?.id ?? '') })).filter((x: any) => x.id)
-          : [];
-      } catch {
-        return [];
-      }
-    },
-    async readEvents(id: string) {
-      try {
-        const out = await (ctx.sessionPersistence as any).readFrom(id, 0);
-        const meta = out?.meta ?? {};
-        return { sessionId: String(meta?.id ?? id), events: out?.events ?? [], path: undefined };
-      } catch {
-        return null;
-      }
-    },
-  };
-  const agg = new UsageAggregator({ store, historicalReader: historicalReader as any });
-
-  // Own the route + session drive + durable store on one effect; dispose closes.
-  ctx.effect(async () => {
+  const hctx = ctx as unknown as HostCtx;
+  const dbPath = (() => {
     try {
-      await store.open(ctx.storageDomain as any);
-      await agg.start();
+      return defaultDbPath({ DSH_HOME: process.env.DSH_HOME });
+    } catch {
+      return defaultDbPath({});
+    }
+  })();
 
-      // v0.2 historical recovery: enumerate ALL durable session logs on disk and
-      // merge every authoritative record once. Idempotent (migrationVersion=2),
-      // preserves existing live records, and sets the tracking start date so the
-      // recovery window is defined and the plugin never double-adds.
-      const mig = await agg.migrateHistorical();
-      if (mig.migrated) {
-        console.log('[dsh-token-usage-sidebar] v0.2 historical recovery ran:', JSON.stringify(mig.summary));
+  const store = new DurableStore({ path: dbPath });
+  ensureDbDir(dbPath);
+  const agg = new DurableAggregator(store);
+
+  ctx.effect(async () => {
+    let migrated = false;
+    let migration: MigrationResult | undefined;
+    try {
+      // 1) Migration: v1.0.1 JSON ledger -> v1.1 SQLite, verified before cutover.
+      //    Idempotent: a 'done' meta short-circuits. Fail-closed: no cutover on
+      //    any verification mismatch; the v1 source is only ever read/copied.
+      const v1Path = v1LedgerPath(dbPath);
+      if (existsSync(v1Path)) {
+        const v1 = readV1Root(v1Path);
+        if (v1) {
+          migration = migrateV1Ledger(store, { v1Path, backupDir: dirname(v1Path) });
+          migrated = migration.migrated;
+          if (migration.status === 'done' && migration.verification.length === 0) {
+            console.log('[dsh-token-usage-sidebar] v1.0.1 -> v1.1 migration complete:',
+              migration.migratedRecords, 'records, lifetimeTotal', migration.v11LifetimeTotal,
+              'in', migration.durationMs, 'ms');
+          } else if (migration.status === 'failed') {
+            console.error('[dsh-token-usage-sidebar] v1.0.1 -> v1.1 migration FAILED (no cutover):',
+              migration.verification);
+          } else if (migration.skippedBecauseDone) {
+            console.log('[dsh-token-usage-sidebar] v1.1 ledger already migrated; skipping.');
+          }
+        } else {
+          console.log('[dsh-token-usage-sidebar] no readable v1 ledger; starting fresh.');
+        }
       } else {
-        console.log('[dsh-token-usage-sidebar] historical recovery already complete (schemaVersion=' +
-          agg.diagnostics().schemaVersion + '), skipping re-scan');
+        console.log('[dsh-token-usage-sidebar] no v1 JSON ledger present; fresh v1.1 install.');
       }
 
-      // Light reconciliation: fold *live* sessions for any invocation not already
-      // in the ledger (e.g. a mid-write/locked log the scan skipped). Idempotent.
+      // 2) Live drive: start AFTER migration so no live event races the cutover.
+      //    Events recorded before this handler are captured in session logs and
+      //    reconciled idempotently below.
       let sessions: Array<{ id: string; events?: readonly SessionEventLike[] }> = [];
       try {
-        sessions = (ctx.sessions as any).list ? [...(ctx.sessions as any).list()] : [];
+        sessions = hctx.sessions.list ? [...hctx.sessions.list()] : [];
       } catch {
         sessions = [];
       }
@@ -235,15 +176,13 @@ export function apply(ctx: Context): void {
         if (events.length === 0) continue;
         agg.apply(collectSessionUsage({ sessionId: String(s.id), events }));
       }
-
-      // Live drive: commit each session event exactly once (framework).
-      ctx.on('session/event', (session: any, event: SessionEventLike) => {
-        const recs = collectSessionUsage({ sessionId: String(session?.id ?? ''), events: [event] });
+      hctx.on('session/event', (session: unknown, event: SessionEventLike) => {
+        const recs = collectSessionUsage({ sessionId: String((session as { id?: unknown })?.id ?? ''), events: [event] });
         if (recs.length > 0) agg.apply(recs);
       });
 
       const trustedHosts = () => {
-        const rt = (ctx as any).webRuntime?.trustedHosts;
+        const rt = hctx.webRuntime?.trustedHosts;
         return Array.isArray(rt) ? rt : [];
       };
       const fence = (req: any): boolean => {
@@ -254,7 +193,7 @@ export function apply(ctx: Context): void {
         }
       };
 
-      const dispose = ctx.webServer.register({
+      const dispose = hctx.webServer.register({
         kind: 'prefix',
         path: '/token-usage/api',
         handler: async (req: any, res: any) => {
@@ -275,20 +214,7 @@ export function apply(ctx: Context): void {
           try {
             const body = await readJsonBody(req);
             if (method === 'summary') {
-              const a = agg.aggregate;
-              const yesterday = totalForOffset(agg.ledgerSnapshot(), 1);
-              writeJson(res, 200, {
-                ok: true,
-                value: {
-                  todayTotal: a.todayTotal,
-                  todayDate: a.todayDate,
-                  yesterdayTotal: yesterday.total,
-                  yesterdayDate: yesterday.date,
-                  lifetimeTotal: a.lifetimeTotal,
-                  recordCount: a.recordCount,
-                  serverNow: currentLocalDate(),
-                },
-              });
+              writeJson(res, 200, { ok: true, value: agg.summary() });
             } else if (method === 'details') {
               const range = insightRangeOf(body);
               if (!range) {
@@ -307,13 +233,14 @@ export function apply(ctx: Context): void {
         },
       });
 
+      const closer = (dispose as (() => void) | null | undefined) ?? undefined;
       return () => {
-        try { dispose?.(); } catch { /* noop */ }
+        try { closer?.(); } catch { /* noop */ }
         void agg.close();
       };
     } catch (e) {
       // Contain failures: the plugin must never take the host down.
-      try { ctx.logger?.warn?.('[dsh-token-usage-sidebar] init failed', e); } catch { /* noop */ }
+      try { hctx.logger?.warn?.('[dsh-token-usage-sidebar] init failed', e); } catch { /* noop */ }
       console.error('[dsh-token-usage-sidebar] init failed', e);
       return () => { void agg.close(); };
     }

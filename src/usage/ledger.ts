@@ -10,6 +10,11 @@
 
 import type { UsageAggregate, UsageRecord, UsageSourceType, RecoveryMetadata } from './types.ts';
 
+// v1.1 typecheck: re-export the shared model types ledger consults so sibling
+// modules (aggregator) can import them from './ledger.ts' as v1.0.1 expected.
+// Type-only re-export; zero runtime effect.
+export type { UsageAggregate, UsageRecord, UsageSourceType, RecoveryMetadata } from './types.ts';
+
 /** Exact per-invocation data used by the insights API; never includes content. */
 export interface UsageDetail {
   inputTokens: number;

@@ -2,6 +2,60 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.0 — 2026-08-16
+
+### Storage architecture
+- **Replaced the monolithic root-JSON ledger with a plugin-owned SQLite durable ledger.
+  The v1.0.1 ledger kept all accounting state in one JSON object that was copied,
+  serialized, and rewritten on every invocation, making per-write cost O(N) in history
+  size. v1.1 uses a SQLite database (Node's built-in `node:sqlite`, WAL journal) so a new
+  invocation is one small row-level upsert and write latency stays effectively flat as
+  history grows (measured flat from 1k to 500k records).
+- `usage_records` is the authoritative source of truth; `aggregate_global` /
+  `aggregate_daily` / `aggregate_model` / `aggregate_day_model` are derived, rebuildable
+  caches. Any aggregate drift is healed by rebuilding from records.
+- Recording and aggregate-delta maintenance happen in one SQLite transaction per batch
+  (subtract old row, add new row) so a chunk→final replacement adjusts aggregates by the
+  difference, never by the full value again.
+
+### Migration (v1.0.1 → v1.1)
+- Automatic, on first startup: detect v1 JSON ledger → read-only validate → immutable
+  timestamped backup → create/open SQLite → insert canonical records → derive
+  aggregates → **verify exact equivalence** (`lifetimeTotal`, `recordCount`, and
+  `sum(records) == global`) → cutover only on success.
+- Idempotent (a completed migration is a no-op on restart), crash-safe (v1 is only
+  read/copied; a partial or failed migration never exposes unverified records and never
+  deletes the v1 source), and fail-closed (any verification mismatch = `failed`, no
+  cutover).
+- Live usage collection does not start until migration/cutover completes, so no live
+  event can race the cutover.
+
+### Performance
+- Same architecture benchmark as v1.0.1 reproduced, plus SQLite benchmarks at 1k / 10k /
+  50k / 100k / 500k (see report): single durable upsert is sub-millisecond and flat,
+  summary/7D/provider-model reads come from maintained aggregates instead of a full-row
+  scan.
+
+### Reliability
+- No silent reset on corrupt persistent data: if authoritative `usage_records` storage is
+  corrupt the plugin does not reset totals to zero; it warns and preserves files.
+- Corrupt aggregate tables are detected and rebuilt from valid records.
+- Shutdown flushes pending writes and checkpoint/closes the SQLite ledger; a usage event
+  inside the debounce window is not lost.
+
+### Compatibility
+- Requires a DSH runtime whose Node provides the built-in `node:sqlite` module
+  (Node ≥ 22.13), consistent with the engine floor already used by the plugin. No native
+  third-party SQLite dependency is added.
+- v1.0.1's durable JSON ledger remains supported as the migration *source*; it is no
+  longer the live store after upgrading.
+
+### Documentation
+- Added `docs/migrations/v1.0.1-to-v1.1.0.md` and `ARCHITECTURE.md`; documented the
+  storage decision and the explicitly rejected chunked-JSON-units alternative in
+  `docs/architecture/STORAGE_DECISION.md`; updated README/README.zh-CN and the data
+  location / upgrade / downgrade guidance.
+
 ## 1.0.1 — 2026-08-16
 
 ### Fixed

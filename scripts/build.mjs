@@ -16,6 +16,10 @@ const hostExternals = [
   'node:path',
   'node:os',
   'node:zlib',
+  // v1.1 durable ledger: keep node:sqlite an external so the DSH host resolves
+  // the built-in binding directly (no bundling of a native addon shim).
+  'node:sqlite',
+  'node:crypto',
 ];
 const clientExternals = [
   'react',
