@@ -1,19 +1,27 @@
 # dsh-token-usage-sidebar
 
-A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) web-profile plugin that shows persistent **Today / Yesterday / Total** provider-reported token usage directly in the sidebar.
+English | [简体中文](#中文说明)
 
-```
-DeepSeek Logo
-  ↓
-  TOKEN USAGE
-  Today            …
-  Yesterday        …
-  Total            …
-  ↓
-+ New Conversation
+A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) web-profile plugin that shows persistent provider-reported token usage in the sidebar:
+
+```text
+TOKEN USAGE
+Today       …
+Yesterday   …
+Total       …
 ```
 
-## Install
+This is a community plugin, not an official DeepSeek plugin.
+
+## Features
+
+- Today, Yesterday, and lifetime Total token usage.
+- Persistent local accounting that survives DSH restarts.
+- Historical recovery from available authoritative session usage records.
+- Replay-safe, deduplicated accounting: an invocation is counted once.
+- Native placement in the DSH web sidebar.
+
+## Installation
 
 Install from GitHub into the DSH `web` profile, then restart DSH:
 
@@ -22,79 +30,160 @@ dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar
 # Restart `dsh web` after installation.
 ```
 
-The install command uses DSH's profile plugin manager. Review third-party source before installing, and pin a commit in production workflows where reproducibility matters.
+Review third-party source before installing. Pin a commit when your workflow requires a reproducible dependency revision.
 
-## Configuration
+## Update
 
-None in v0.2.1 (the component is always on when the plugin loads). No settings page or card is added. Future options (enable toggle, Show Session/Cost/Cache ratio, reset) belong in DSH settings.
+Update the installed plugin, then restart DSH:
 
-## How it works
+```bash
+dsh plugin --profile web update dsh-token-usage-sidebar
+# Restart `dsh web` after updating.
+```
 
-- Usage comes from DSH/provider-reported records, never a tokenizer estimate.
-- Accounting is persisted locally, so restarting DSH does not reset totals.
-- Historical session usage is recovered when authoritative records are available.
-- Replay and duplicate delivery are deduplicated, so an invocation is counted exactly once.
-- Today and Yesterday use the host machine's local calendar-day buckets.
-
-## Data source (authoritative)
-
-Usage comes from **durable session-log events** produced by the model/provider runtimes:
-
-- `assistant/message .data.usage` — the final authoritative `TokenUsage` for a committed `(turn, step)`; the count a sidebar should prefer.
-- `assistant/chunk (chunk.type === 'usage')` — an early stream sample for the same `(turn, step)`.
-
-`TokenUsage = { inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, reasoningTokens? }` are **disjoint** buckets. The displayed total is the provider-authoritative sum **`total = input + cacheRead + cacheWrite + output`**; `reasoningTokens` is an *output subdivision* and is deliberately not added again (matches @deepseek-ai/dsh-token-meter). Partial streamed text is never counted; only the authoritative usage event after a completed submission is recorded.
-
-## Exactly-once accounting
-
-One model invocation contributes exactly once. The dedup identity is `(sessionId, turn, step)`. Replaying a session log, re-delivering an event, or a retried request for the same `(turn, step)` **replaces** that invocation's total (higher `seq` wins) instead of adding again. The projection framework drives every committed session event exactly once per seq, so the fold is idempotent by construction.
-
-## Persistence
-
-The process-global ledger (lifetime/today/byId plus per-record local day and highest seq) is stored through DSH's domain-KV facility (`ctx.storageDomain`) and written to `~/.dsh/storages/dsh_token_usage_sidebar.json` — schema-validated, atomic (temp+fsync+rename), versioned. It survives DSH restart and browser refresh. Browser localStorage is never authoritative.
-
-## Timezone ("Today" and "Yesterday")
-
-Today and Yesterday use the **local calendar date** of the host process (the user's system timezone). At a local-day boundary, Today is derived from records dated today and Yesterday from records dated one local day earlier; `lifetimeTotal` is unaffected. No timezone is hard-coded. Legacy rows without a recoverable timestamp remain part of Total but are deliberately excluded from day-specific buckets.
-
-## Supported providers
-
-Works for every provider whose durable session events carry a provider `TokenUsage` — DeepSeek, OpenAI, Anthropic, Google, OpenRouter, local and other DSH-compatible model plugins. Provider caveats are respected (e.g. DeepSeek never reports `cacheWriteTokens`; treated as 0). No fake support for providers that expose no reliable usage data.
-
-## Historical migration
-
-On first activation the host **folds existing durable session logs** (including cold/archived sessions) idempotently, deduped by `(sessionId, turn, step)`, so Total starts from existing authoritative usage. Versioned recovery safely replays known records to restore missing metadata without adding them again. There is **no invented/estimated history**: if no authoritative record exists for a session, it contributes nothing.
-
-## Privacy
-
-Only accounting metadata is persisted: session id, (turn, step), highest seq, local day, provenance, and token totals. Session logs are read solely to extract provider usage and event timing; no prompt, assistant, tool output, API key, credential, or conversation text is persisted by this plugin.
-
-## Uninstall
+## Removal
 
 ```bash
 dsh plugin --profile web remove dsh-token-usage-sidebar
 # Restart `dsh web` after removal.
 ```
 
-Uninstalling does not delete the persisted local ledger. Delete `~/.dsh/storages/dsh_token_usage_sidebar.json` manually only if you intentionally want to reset all-time totals.
+Removing the plugin does not reset its separately persisted local accounting data.
 
-## Known limitations
+## How it works
 
-- **Multi-instance**: more than one DSH host sharing `~/.dsh` writes the same domain file; domain-KV is single-process-first (last-write-wins). Each instance folds the same session events, so records reconcile; brief cross-process divergence is possible.
-- **Client refresh path**: the client refetches the host summary on mount, on a low-cost 4-second interval (paused when hidden), and on re-activation. A host→client push channel would require editing the `dsh-api-remotes` forwarded-event allowlist, so it is intentionally avoided.
+```text
+DSH/provider usage records
+        ↓
+historical and live collection
+        ↓
+deduplication
+        ↓
+persistent local accounting
+        ↓
+sidebar summary
+```
+
+The plugin uses provider/runtime-reported usage records rather than tokenizer estimates. It treats the final committed usage record as authoritative, recovers known historical usage where available, and replaces duplicate/replayed samples instead of adding them again. Today and Yesterday use the host machine's local calendar days.
+
+## Data & Privacy
+
+Usage accounting stays local to the DSH runtime. The source repository does not receive, contain, or upload a user's token ledger. Runtime persistence is separate from the source code and release artifacts.
+
+The plugin stores accounting metadata needed for reliable totals, such as deduplication identity, date bucket, and token totals. It does not persist prompts, assistant text, tool output, API keys, credentials, or conversation content as part of its ledger.
+
+## Compatibility and Status
+
+Current release: [v0.2.1](https://github.com/y2zyyr/dsh-token-usage-sidebar/releases/tag/v0.2.1).
+
+Verified with DeepSeek Harness `0.1.0-rc.6` and its `web` profile. No broader DSH-version or operating-system compatibility is claimed.
 
 ## Development
 
 ```bash
 npm install
-npm test       # accounting, historical recovery, daily-bucket, and restart invariants
-npm run build  # writes the shipped host and browser bundles to lib/
+npm test
+npm run build
 ```
 
-## Compatibility
-
-Verified with DeepSeek Harness `0.1.0-rc.6` and its `web` profile. No broader DSH-version or OS compatibility is claimed.
+`npm test` runs the accounting and historical-recovery tests. `npm run build` writes the shipped host and browser bundles to `lib/`.
 
 ## License
+
+[MIT](LICENSE)
+
+---
+
+# 中文说明
+
+[English](#dsh-token-usage-sidebar) | 简体中文
+
+这是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web Profile 的社区插件，在侧边栏显示由 provider/runtime 上报并持久化保存的 token 用量：
+
+```text
+TOKEN USAGE
+Today       今日
+Yesterday   昨日
+Total       累计
+```
+
+这是社区插件，并非 DeepSeek 官方插件。
+
+## 功能
+
+- 显示今日、昨日和累计 token 用量。
+- 本地持久化统计；重启 DSH 后不会归零。
+- 在存在权威会话用量记录时恢复历史用量。
+- 对重放和重复事件去重，同一次调用只计入一次。
+- 原生显示在 DSH Web 侧边栏。
+
+## 安装
+
+在 DSH 的 `web` profile 中从 GitHub 安装，然后重启 DSH：
+
+```bash
+dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar
+# 安装后重启 `dsh web`。
+```
+
+安装第三方插件前请先审阅源码；如需可复现的依赖版本，请固定到具体 commit。
+
+## 更新
+
+更新已安装的插件后重启 DSH：
+
+```bash
+dsh plugin --profile web update dsh-token-usage-sidebar
+# 更新后重启 `dsh web`。
+```
+
+## 卸载
+
+```bash
+dsh plugin --profile web remove dsh-token-usage-sidebar
+# 卸载后重启 `dsh web`。
+```
+
+卸载插件不会自动清空独立保存的本地用量统计。
+
+## 工作方式
+
+```text
+DSH/provider 用量记录
+        ↓
+历史记录与实时记录采集
+        ↓
+去重
+        ↓
+本地持久化统计
+        ↓
+侧边栏摘要
+```
+
+插件使用 provider/runtime 上报的用量记录，而不是 tokenizer 估算值。最终提交的用量记录视为权威数据；能够读取的历史权威记录会被恢复。重复或重放的样本会被替换而不是累加。今日和昨日按主机本地日历日计算。
+
+## 数据与隐私
+
+用量统计保留在本机 DSH runtime 中。GitHub 源码仓库不会接收、包含或上传你的 token 账本；运行时持久化数据与源码和发布产物相互独立。
+
+为了得到可靠的累计数据，插件仅保存必要的统计元数据，例如去重标识、日期桶和 token 总数。其账本不保存提示词、助手文本、工具输出、API Key、凭据或对话内容。
+
+## 兼容性与状态
+
+当前版本：[v0.2.1](https://github.com/y2zyyr/dsh-token-usage-sidebar/releases/tag/v0.2.1)。
+
+已验证 DeepSeek Harness `0.1.0-rc.6` 的 `web` profile；未声明更广泛的 DSH 版本或操作系统兼容性。
+
+## 开发
+
+```bash
+npm install
+npm test
+npm run build
+```
+
+`npm test` 运行用量统计与历史恢复测试；`npm run build` 将发布用的 host 和 browser bundle 写入 `lib/`。
+
+## 许可证
 
 [MIT](LICENSE)
