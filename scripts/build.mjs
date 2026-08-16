@@ -70,6 +70,9 @@ ${body}
 `;
 
   writeFileSync(join(root, 'lib', 'client.js'), wrapped);
+  // Some DSH CLI web profiles resolve the browser module from the package
+  // root. Keep that compatibility artifact byte-for-byte aligned with lib/.
+  writeFileSync(join(root, 'client.js'), wrapped);
 
   mkdirSync(join(root, 'lib', 'types'), { recursive: true });
   mkdirSync(join(root, 'lib', 'types', 'client'), { recursive: true });
@@ -78,5 +81,6 @@ ${body}
 
   console.log('[build] host ->', join(root, 'lib', 'index.js'));
   console.log('[build] client ->', join(root, 'lib', 'client.js'), '(' + Buffer.byteLength(wrapped) + ' bytes)');
+  console.log('[build] client compat ->', join(root, 'client.js'));
 }
 main().catch((e) => { console.error('[build] failed', e); process.exit(1); });

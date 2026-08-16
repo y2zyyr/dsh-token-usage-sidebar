@@ -20,8 +20,8 @@ function writeSessionDir(sessionsRoot, sessionId, events) {
   for (const ev of events) lines.push(JSON.stringify(ev));
   writeFileSync(join(dir, 'session.jsonl.zstd'), zstdCompressSync(Buffer.from(lines.join('\n') + '\n', 'utf8')));
 }
-function msg(sessionId, turn, step, seq, usage) {
-  return { type: 'assistant/message', seq, time: Date.now(), data: { turn, step, usage } };
+function msg(sessionId, turn, step, seq, usage, source) {
+  return { type: 'assistant/message', seq, time: Date.now(), data: { turn, step, usage, ...(source ? { message: { source } } : {}) } };
 }
 
 test('same invocation in session log AND already-live ledger is counted once', async () => {
@@ -42,13 +42,15 @@ test('same invocation in session log AND already-live ledger is counted once', a
 
 test('distinct session-log invocations are recovered and counted', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dts-'));
-  writeSessionDir(root, 'sessA', [ msg('sessA', 1, 0, 1, { inputTokens: 1000, outputTokens: 500, cacheReadTokens: 100 }) ]);
+  writeSessionDir(root, 'sessA', [ msg('sessA', 1, 0, 1, { inputTokens: 1000, outputTokens: 500, cacheReadTokens: 100 }, { provider: 'deepseek', model: 'v4' }) ]);
   writeSessionDir(root, 'sessB', [ msg('sessB', 2, 0, 3, { inputTokens: 2000, outputTokens: 700, cacheReadTokens: 0 }) ]);
   const res = await runHistoricalMigration(emptyLedger(), { sessionsDir: root });
   assert.equal(res.ledger.lifetimeTotal, 4300);
   assert.equal(res.ledger.recordCount, 2);
   assert.equal(res.ledger.historicalRecoveredTotal, 4300);
   assert.equal(res.ledger.liveRecordedTotal, 0);
+  assert.equal(res.ledger.detailBy['sessA:1:0'].provider, 'deepseek');
+  assert.equal(res.ledger.detailBy['sessA:1:0'].model, 'v4');
   assert.equal(res.summary.migrated, true);
   rmSync(root, { recursive: true, force: true });
 });
@@ -75,7 +77,7 @@ test('v0.1 ledger upgrade retains existing records and adds new history (no rese
   assert.equal(res.ledger.lifetimeTotal, 14000, '10000 + 4000');
   assert.ok(hasRecord(res.ledger, 'old:1:0'), 'existing record preserved');
   assert.ok(hasRecord(res.ledger, 'sessNew:1:0'), 'new history added');
-  assert.equal(res.ledger.schemaVersion, 3);
+  assert.equal(res.ledger.schemaVersion, 4);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -125,7 +127,7 @@ test('historical timestamps are retained for diagnostics and daily buckets', asy
   rmSync(root, { recursive: true, force: true });
 });
 
-test('v0.2 rows are enriched by the v3 replay without lifetime inflation', async () => {
+test('v0.2 rows are enriched by the v1.0 replay without lifetime inflation', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dts-'));
   const timestamp = Date.parse('2026-08-14T12:00:00');
   writeSessionDir(root, 'known', [{ type: 'assistant/message', seq: 5, time: timestamp, data: { turn: 1, step: 0, usage: { inputTokens: 100, outputTokens: 20 } } }]);
@@ -134,5 +136,9 @@ test('v0.2 rows are enriched by the v3 replay without lifetime inflation', async
   assert.equal(res.ledger.lifetimeTotal, 120);
   assert.equal(res.ledger.recordCount, 1);
   assert.equal(res.ledger.dayBy['known:1:0'], '2026-08-14');
+  assert.deepEqual(res.ledger.detailBy['known:1:0'], {
+    inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+    provider: undefined, model: undefined,
+  });
   rmSync(root, { recursive: true, force: true });
 });

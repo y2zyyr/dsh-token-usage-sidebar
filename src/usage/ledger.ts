@@ -10,6 +10,17 @@
 
 import type { UsageAggregate, UsageRecord, UsageSourceType, RecoveryMetadata } from './types.ts';
 
+/** Exact per-invocation data used by the insights API; never includes content. */
+export interface UsageDetail {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  provider?: string;
+  model?: string;
+}
+
 /**
  * Mutable, durable-ready accounting state. Kept small and JSON-serializable so
  * a plugin can persist it atomically. byId maps dedup id -> totalTokens.
@@ -45,9 +56,11 @@ export interface LedgerState {
   dayBy?: Record<string, string>;
   /** Highest committed session-event sequence observed for each invocation. */
   seqBy?: Record<string, number>;
+  /** v1.0 exact buckets and source identity keyed by the stable invocation id. */
+  detailBy?: Record<string, UsageDetail>;
 }
 
-export const LEDGER_SCHEMA_VERSION = 3;
+export const LEDGER_SCHEMA_VERSION = 4;
 
 export function emptyLedger(now = Date.now(), todayDate = localDateOf(now)): LedgerState {
   return {
@@ -107,6 +120,24 @@ export function recordUsage(prev: LedgerState, rec: UsageRecord): LedgerState {
   const seqBy = { ...(prev.seqBy ?? {}) };
   if (isNew || rec.seq >= (seqBy[rec.id] ?? -1)) seqBy[rec.id] = rec.seq;
 
+  // A final message may follow an earlier chunk. Replace buckets/source only
+  // when it is at least as recent, while retaining source fields an early chunk
+  // could not know. This lets a v1.0 replay enrich legacy rows idempotently.
+  const shouldReplaceDetail = isNew || rec.seq >= (prev.seqBy?.[rec.id] ?? -1);
+  const previousDetail = prev.detailBy?.[rec.id];
+  const detailBy = { ...(prev.detailBy ?? {}) };
+  if (shouldReplaceDetail) {
+    detailBy[rec.id] = {
+      inputTokens: rec.inputTokens,
+      outputTokens: rec.outputTokens,
+      cacheReadTokens: rec.cacheReadTokens,
+      cacheWriteTokens: rec.cacheWriteTokens,
+      reasoningTokens: rec.reasoningTokens,
+      provider: rec.provider ?? previousDetail?.provider,
+      model: rec.model ?? previousDetail?.model,
+    };
+  }
+
   // A replacement (stream usage followed by final assistant/message usage)
   // belongs to the source that first introduced the invocation.  Keep the
   // source totals additive with lifetimeTotal when its final usage changes.
@@ -128,6 +159,7 @@ export function recordUsage(prev: LedgerState, rec: UsageRecord): LedgerState {
     schemaVersion: prev.schemaVersion ?? LEDGER_SCHEMA_VERSION,
     ...(Object.keys(dayBy).length > 0 ? { dayBy } : {}),
     ...(Object.keys(seqBy).length > 0 ? { seqBy } : {}),
+    ...(Object.keys(detailBy).length > 0 ? { detailBy } : {}),
     ...(prev.recovery ? { recovery: prev.recovery } : {}),
   };
 }

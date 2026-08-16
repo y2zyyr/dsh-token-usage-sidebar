@@ -11,6 +11,7 @@ import { currentLocalDate, type UsageRecord } from './types.ts';
 import type { UsageStore } from './store.ts';
 import { runHistoricalMigration, type HistoricalReader } from './historical.ts';
 import { totalForOffset } from './ledger.ts';
+import { buildUsageInsights, type InsightRange, type UsageInsights } from './insights.ts';
 
 export interface AggregatorOptions {
   store: UsageStore;
@@ -119,6 +120,7 @@ export class UsageAggregator {
       yesterdayDate: yesterday.date,
       lifetimeTotal: this.ledger.lifetimeTotal,
       recordCount: this.ledger.recordCount,
+      detailRecordCount: Object.keys(this.ledger.detailBy ?? {}).length,
       liveRecordedTotal: this.ledger.liveRecordedTotal ?? 0,
       historicalRecoveredTotal: this.ledger.historicalRecoveredTotal ?? 0,
       historicalRecoveredRecordCount: this.ledger.historicalRecoveredRecordCount ?? 0,
@@ -142,6 +144,8 @@ export class UsageAggregator {
   }
 
   get aggregate(): UsageAggregate { return aggregateOf(this.ledger); }
+  /** Aggregate-only detail view for the settings page. */
+  insights(range: InsightRange): UsageInsights { return buildUsageInsights(this.ledger, range, this.now()); }
   /** Read-only snapshot of the underlying ledger (for per-day aggregation). */
   ledgerSnapshot(): LedgerState { return this.ledger; }
   get ready(): boolean { return !this.loading; }

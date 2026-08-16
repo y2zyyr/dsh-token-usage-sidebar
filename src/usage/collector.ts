@@ -45,6 +45,18 @@ export function bucketsOf(data: Record<string, unknown> | undefined): UsageBucke
   };
 }
 
+/** Extract the source selected by DSH for a final assistant message. */
+export function modelSourceOf(data: Record<string, unknown> | undefined): { provider?: string; model?: string } {
+  const source = data?.message && typeof data.message === 'object'
+    ? (data.message as Record<string, unknown>).source
+    : undefined;
+  if (!source || typeof source !== 'object') return {};
+  const record = source as Record<string, unknown>;
+  const provider = typeof record.provider === 'string' && record.provider.length > 0 ? record.provider : undefined;
+  const model = typeof record.model === 'string' && record.model.length > 0 ? record.model : undefined;
+  return { provider, model };
+}
+
 /**
  * Collect every authoritative usage event from a session log into UsageRecords.
  * Emits one record per distinct (turn, step) usage sample; for a given id the
@@ -71,6 +83,8 @@ export function collectSessionUsage(input: FoldInput): readonly UsageRecord[] {
     let turn = 0;
     let step = 0;
     let source: 'assistant/message' | 'assistant/chunk';
+    let provider = input.provider;
+    let model = input.model;
     let ts = now;
     // DSH durable events carry the wall-clock at event top level as `time`.
     const eventTime = Number((event as unknown as { time?: number }).time) || 0;
@@ -81,6 +95,9 @@ export function collectSessionUsage(input: FoldInput): readonly UsageRecord[] {
       turn = Number(data.turn ?? 0);
       step = Number(data.step ?? 0);
       source = 'assistant/message';
+      const messageSource = modelSourceOf(data);
+      provider = messageSource.provider ?? provider;
+      model = messageSource.model ?? model;
       ts = Number(data.timestamp) || Number(data.createdAt) || eventTime || now;
     } else if (event.type === 'assistant/chunk') {
       const data = event.data ?? {};
@@ -111,8 +128,8 @@ export function collectSessionUsage(input: FoldInput): readonly UsageRecord[] {
       seq: event.seq,
       timestamp: ts,
       localDate: local(ts),
-      provider: input.provider,
-      model: input.model,
+      provider,
+      model,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       cacheReadTokens: usage.cacheReadTokens ?? 0,

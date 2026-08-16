@@ -20,6 +20,7 @@ import {
 import { collectSessionUsage, type SessionEventLike } from './usage/collector';
 import { currentLocalDate } from './usage/types';
 import { totalForOffset } from './usage/ledger';
+import type { InsightRange } from './usage/insights';
 import type { UsageStore, LedgerState } from './usage/store';
 
 export const name = 'dsh-token-usage-sidebar';
@@ -47,6 +48,15 @@ const LedgerSchema = z.object({
   // every restart.
   dayBy: z.record(z.string(), z.string()).optional(),
   seqBy: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  detailBy: z.record(z.string(), z.object({
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    cacheReadTokens: z.number().int().nonnegative(),
+    cacheWriteTokens: z.number().int().nonnegative(),
+    reasoningTokens: z.number().int().nonnegative(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+  })).optional(),
   recovery: z.object({
     trackingStartDate: z.string().optional(),
     earliestRecoveredAt: z.number().optional(),
@@ -153,6 +163,11 @@ async function readJsonBody(req: any): Promise<unknown> {
   }
 }
 
+function insightRangeOf(body: unknown): InsightRange | undefined {
+  const range = body && typeof body === 'object' ? (body as { range?: unknown }).range : undefined;
+  return range === 'today' || range === 'yesterday' || range === '7d' || range === 'all' ? range : undefined;
+}
+
 export function apply(ctx: Context): void {
   const store = new DomainLedgerStore();
   // Historical reader backed by DSH session-persistence: list() enumerates every
@@ -250,7 +265,7 @@ export function apply(ctx: Context): void {
             return;
           }
           try {
-            await readJsonBody(req);
+            const body = await readJsonBody(req);
             if (method === 'summary') {
               const a = agg.aggregate;
               const yesterday = totalForOffset(agg.ledgerSnapshot(), 1);
@@ -266,6 +281,13 @@ export function apply(ctx: Context): void {
                   serverNow: currentLocalDate(),
                 },
               });
+            } else if (method === 'details') {
+              const range = insightRangeOf(body);
+              if (!range) {
+                writeJson(res, 400, { ok: false, error: { code: 'validation-error', message: 'range must be today, yesterday, 7d, or all' } });
+                return;
+              }
+              writeJson(res, 200, { ok: true, value: agg.insights(range) });
             } else if (method === 'debug') {
               writeJson(res, 200, { ok: true, value: agg.diagnostics() });
             } else {

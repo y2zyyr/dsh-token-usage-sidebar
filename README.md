@@ -2,7 +2,7 @@
 
 English | [简体中文](#中文说明)
 
-A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) web-profile plugin that shows persistent provider-reported token usage in the sidebar:
+A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) web-profile plugin that keeps provider-reported token usage locally. It provides both a persistent sidebar summary and a native **Token Usage** settings page.
 
 ```text
 TOKEN USAGE
@@ -15,11 +15,18 @@ This is a community plugin, not an official DeepSeek plugin.
 
 ## Features
 
-- Today, Yesterday, and lifetime Total token usage.
+- Sidebar summary: Today, Yesterday, and lifetime Total.
+- Native **Settings → Token Usage** page, placed after Agent Presets and before Plugin Market.
+- Four overview cards: All time, Today, Yesterday, and Last 7 days.
+- Detail range selector: Today, Yesterday, 7D, and All time.
+- Per-range totals for Input, Output, Cache Read, Cache Write, Reasoning, and call count.
+- Provider/model table, sorted by Total, plus a seven-local-day table that retains zero-value days.
 - Persistent local accounting that survives DSH restarts.
 - Historical recovery from available authoritative session usage records.
 - Replay-safe, deduplicated accounting: an invocation is counted once.
 - Native placement in the DSH web sidebar.
+
+![Token Usage settings page](docs/screenshots/token-usage-settings-v1.0.0.jpeg)
 
 ## Installation
 
@@ -64,7 +71,15 @@ persistent local accounting
 sidebar summary
 ```
 
-The plugin uses provider/runtime-reported usage records rather than tokenizer estimates. It treats the final committed usage record as authoritative, recovers known historical usage where available, and replaces duplicate/replayed samples instead of adding them again. Today and Yesterday use the host machine's local calendar days.
+The plugin uses provider/runtime-reported usage records rather than tokenizer estimates. Total is `input + cache read + cache write + output`; **Reasoning** is displayed as an output subdivision and is never added to Total a second time. It uses the final committed assistant message's `message.source.provider` and `message.source.model` when available.
+
+All day-based ranges use the DSH host's local calendar days. Last 7 days includes today plus the previous six local days. The settings page receives aggregate results only; it never receives the individual invocation ledger.
+
+### Migration and historical coverage
+
+v1.0.0 performs one idempotent replay of recoverable persistent DSH session events to enrich existing calls with their exact buckets and model metadata. A previously recorded call is only enriched, or replaced by a higher-sequence final message: it is not added to lifetime usage again.
+
+Some legacy calls may have a reliable All time total but no recoverable date, bucket, provider, or model. Those tokens remain included in All time and are explicitly shown as **unclassified coverage**. They are never invented into a date or model row.
 
 ## Data & Privacy
 
@@ -74,7 +89,7 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
 
 ## Compatibility and Status
 
-Current release: [v0.2.1](https://github.com/y2zyyr/dsh-token-usage-sidebar/releases/tag/v0.2.1).
+Current release: v1.0.0.
 
 Verified with DeepSeek Harness `0.1.0-rc.6` and its `web` profile. No broader DSH-version or operating-system compatibility is claimed.
 
@@ -98,7 +113,7 @@ npm run build
 
 [English](#dsh-token-usage-sidebar) | 简体中文
 
-这是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web Profile 的社区插件，在侧边栏显示由 provider/runtime 上报并持久化保存的 token 用量：
+这是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web Profile 的社区插件，在侧边栏显示由 provider/runtime 上报并持久化保存的 token 用量，并在原生设置中提供完整的 **Token 用量** 页面：
 
 ```text
 TOKEN USAGE
@@ -111,11 +126,18 @@ Total       累计
 
 ## 功能
 
-- 显示今日、昨日和累计 token 用量。
+- 侧边栏显示今日、昨日和累计 token 用量。
+- 在 **设置 → Token 用量** 中提供独立页面，位置在 Agent 预设之后、插件市场之前。
+- 固定概览卡片：全部时间、今天、昨天、最近 7 天。
+- 明细支持今天、昨天、7 天、全部时间四种范围。
+- 显示输入、输出、缓存读取、缓存写入、推理、调用次数。
+- 按供应商/模型汇总（按总量排序），并始终展示最近 7 个本地自然日（包含零值日期）。
 - 本地持久化统计；重启 DSH 后不会归零。
 - 在存在权威会话用量记录时恢复历史用量。
 - 对重放和重复事件去重，同一次调用只计入一次。
 - 原生显示在 DSH Web 侧边栏。
+
+![Token 用量设置页](docs/screenshots/token-usage-settings-v1.0.0.jpeg)
 
 ## 安装
 
@@ -160,7 +182,15 @@ DSH/provider 用量记录
 侧边栏摘要
 ```
 
-插件使用 provider/runtime 上报的用量记录，而不是 tokenizer 估算值。最终提交的用量记录视为权威数据；能够读取的历史权威记录会被恢复。重复或重放的样本会被替换而不是累加。今日和昨日按主机本地日历日计算。
+插件使用 provider/runtime 上报的用量记录，而不是 tokenizer 估算值。总计为 `输入 + 缓存读取 + 缓存写入 + 输出`；**推理**只是输出的细分展示，绝不会再次加到总计。最终提交消息中的 `message.source.provider/model` 用于模型归属。
+
+所有按日范围均使用 DSH 主机本地自然日；最近 7 天包含今天和此前 6 天。设置页只请求聚合结果，不会把逐调用账本发送到浏览器。
+
+### 迁移与历史覆盖
+
+v1.0.0 会对可恢复的 DSH 持久会话事件做一次幂等重放，为已有调用补齐精确 buckets 和模型元数据。已有调用只会被补充信息，或被更高 seq 的最终消息替换，不会重复增加累计用量。
+
+少量旧调用可能只有可靠的全部时间总计，无法再恢复日期、类别、供应商或模型。它们仍包含在全部时间中，并以“未分类覆盖”明确显示；插件不会伪造日期或模型归属。
 
 ## 数据与隐私
 
@@ -170,7 +200,7 @@ DSH/provider 用量记录
 
 ## 兼容性与状态
 
-当前版本：[v0.2.1](https://github.com/y2zyyr/dsh-token-usage-sidebar/releases/tag/v0.2.1)。
+当前版本：v1.0.0。
 
 已验证 DeepSeek Harness `0.1.0-rc.6` 的 `web` profile；未声明更广泛的 DSH 版本或操作系统兼容性。
 

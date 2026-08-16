@@ -19,9 +19,9 @@ import { collectSessionUsage } from './collector.ts';
 import { foldRecords, hasRecord, type LedgerState } from './ledger.ts';
 import type { RecoveryMetadata, UsageSourceType } from './types.ts';
 
-// v3 replays the durable union once to fill dayBy/seqBy that v0.2 accidentally
-// omitted from its storage schema.  Existing ids are enriched, never re-added.
-export const HISTORICAL_MIGRATION_VERSION = 3;
+// v4 replays the durable union once to fill v1.0 bucket and model metadata.
+// Existing ids are enriched/replaced by higher-seq final messages, never added.
+export const HISTORICAL_MIGRATION_VERSION = 4;
 
 /** One persisted session the recovery scans. */
 export interface HistoricalSession {

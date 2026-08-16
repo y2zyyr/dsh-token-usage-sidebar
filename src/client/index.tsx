@@ -9,8 +9,20 @@
 // core-data-transport modification.
 import type { Context } from '@deepseek-ai/cordis';
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { TokenUsageSettings } from './settings.tsx';
 
 export const inject = ['slots', 'locale', 'connection'];
+
+const SETTINGS_NS = 'dsh-token-usage-sidebar';
+const settingsLocale = {
+  en: {
+    nav: 'Token Usage', title: 'Token Usage', subtitle: 'Authoritative usage recorded by DeepSeek Harness.', allTime: 'All time', today: 'Today', yesterday: 'Yesterday', last7Days: 'Last 7 days', details: 'Usage details', '7d': '7D', all: 'All time', total: 'Total', input: 'Input', output: 'Output', cacheRead: 'Cache read', cacheWrite: 'Cache write', reasoning: 'Reasoning', reasoningHint: 'included in output', calls: 'Calls', byModel: 'By provider and model', provider: 'Provider', model: 'Model', sevenDayDaily: 'Last 7 local days', date: 'Date', loading: 'Loading token usage…', unavailable: 'Usage data is temporarily unavailable.', noClassified: 'No classified usage in this range.', unknown: '{tokens} tokens across {calls} calls cannot be classified from older records. They remain included in Total.',
+  },
+  zh: {
+    nav: 'Token 用量', title: 'Token 用量', subtitle: '基于 DeepSeek Harness 已提交消息的权威计数。', allTime: '全部时间', today: '今天', yesterday: '昨天', last7Days: '最近 7 天', details: '用量明细', '7d': '7 天', all: '全部时间', total: '总计', input: '输入', output: '输出', cacheRead: '缓存读取', cacheWrite: '缓存写入', reasoning: '推理', reasoningHint: '已包含在输出中', calls: '调用次数', byModel: '按供应商和模型', provider: '供应商', model: '模型', sevenDayDaily: '最近 7 个本地自然日', date: '日期', loading: '正在加载 Token 用量…', unavailable: 'Token 用量暂时不可用。', noClassified: '这个范围内没有可分类的用量。', unknown: '有 {tokens} tokens、{calls} 次调用无法从旧记录中分类；它们仍计入总计。',
+  },
+};
 
 // ── summary wire shape ─────────────────────────────────────────────────────
 export interface Summary {
@@ -130,6 +142,7 @@ html[data-dsh-desktop=true] .dtsu-w{border-color:transparent}
 .dtsu-k{color:inherit}
 .dtsu-v{font-variant-numeric:tabular-nums;font-weight:600;color:var(--dsw-alias-label-primary)}
 .dtsu-empty{opacity:.45}
+.dtsu-settings{width:100%;padding:4px 0 18px;color:var(--dsw-alias-label-primary,#eee);font-size:13px}.dtsu-settings h2,.dtsu-settings h3{margin:0;font-weight:600}.dtsu-settings h2{font-size:16px}.dtsu-settings h3{font-size:14px}.dtsu-settings-head,.dtsu-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}.dtsu-settings-head p{margin:5px 0 0;color:var(--dsw-alias-label-secondary,#aaa)}.dtsu-range-date{color:var(--dsw-alias-label-tertiary,#888);font-variant-numeric:tabular-nums;white-space:nowrap}.dtsu-overview,.dtsu-metrics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:22px}.dtsu-metrics-grid{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:12px}.dtsu-metric{min-height:66px;padding:12px;border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.22));border-radius:10px;background:var(--dsw-alias-fill-l2,rgba(127,127,127,.06));display:flex;flex-direction:column;gap:5px}.dtsu-metric span,.dtsu-metric small{color:var(--dsw-alias-label-secondary,#aaa);font-size:12px}.dtsu-metric small{font-size:10px}.dtsu-metric strong{font-size:18px;font-variant-numeric:tabular-nums}.dtsu-range-switch{display:flex;border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.22));border-radius:8px;padding:2px;gap:2px}.dtsu-range-switch button{border:0;background:transparent;color:var(--dsw-alias-label-secondary,#aaa);padding:5px 9px;border-radius:6px;font:inherit;cursor:pointer}.dtsu-range-switch button.is-active{background:var(--dsw-alias-fill-l3,rgba(127,127,127,.2));color:var(--dsw-alias-label-primary,#fff)}.dtsu-table-title{margin:24px 0 10px}.dtsu-table-wrap{overflow:auto;border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.22));border-radius:9px}.dtsu-table{border-collapse:collapse;width:100%;min-width:760px;font-variant-numeric:tabular-nums}.dtsu-table th,.dtsu-table td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.14));white-space:nowrap}.dtsu-table th{color:var(--dsw-alias-label-secondary,#aaa);font-weight:500;font-size:11px}.dtsu-table th:first-child,.dtsu-table td:first-child,.dtsu-table th:nth-child(2),.dtsu-table td:nth-child(2){text-align:left}.dtsu-table tr:last-child td{border-bottom:0}.dtsu-note,.dtsu-loading,.dtsu-empty-row{color:var(--dsw-alias-label-secondary,#aaa)}.dtsu-note{margin:0 0 4px;padding:9px 10px;border-radius:8px;background:var(--dsw-alias-fill-l2,rgba(127,127,127,.06))}.dtsu-empty-row{text-align:center!important;padding:20px!important}@media(max-width:760px){.dtsu-overview,.dtsu-metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dtsu-section-head{flex-direction:column}.dtsu-range-date{display:none}}
 `;
     document.head.appendChild(tag);
   }, []);
@@ -158,21 +171,94 @@ html[data-dsh-desktop=true] .dtsu-w{border-color:transparent}
   );
 }
 
+// Older DSH Web shells do not declare `sidebar.leading`. Keep the official
+// slot path below as the preferred integration, but mount immediately before
+// DSH's own New Session button when that slot never becomes available.
+function findNewSessionButton(): HTMLButtonElement | undefined {
+  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('button'));
+  return buttons.find((button) => String(button.className).includes('newSession'))
+    ?? buttons.find((button) => button.hasAttribute('aria-label') && button.querySelector('span') !== null);
+}
+
+function mountLegacySidebarFallback(): () => void {
+  if (typeof document === 'undefined' || !document.body) return () => {};
+  let mount: HTMLDivElement | undefined;
+  let root: Root | undefined;
+  let resize: ResizeObserver | undefined;
+
+  const disposeMount = () => {
+    resize?.disconnect();
+    resize = undefined;
+    root?.unmount();
+    root = undefined;
+    mount?.remove();
+    mount = undefined;
+  };
+  const attach = () => {
+    const target = findNewSessionButton();
+    if (!target || !target.parentElement) return;
+    if (mount?.parentElement === target.parentElement && mount.nextElementSibling === target) {
+      mount.style.display = target.getBoundingClientRect().width < 100 ? 'none' : '';
+      return;
+    }
+    disposeMount();
+    mount = document.createElement('div');
+    mount.dataset.dshTokenUsageSidebarFallback = '1';
+    target.parentElement.insertBefore(mount, target);
+    root = createRoot(mount);
+    root.render(<TokenUsageSidebar />);
+    const updateCollapsedVisibility = () => {
+      if (mount) mount.style.display = target.getBoundingClientRect().width < 100 ? 'none' : '';
+    };
+    resize = new ResizeObserver(updateCollapsedVisibility);
+    resize.observe(target);
+    updateCollapsedVisibility();
+  };
+  const observer = new MutationObserver(attach);
+  observer.observe(document.body, { childList: true, subtree: true });
+  attach();
+  return () => {
+    observer.disconnect();
+    disposeMount();
+  };
+}
+
 // ── client plugin body ─────────────────────────────────────────────────────
 export function apply(ctx: Context): void {
-  // Wait for the sidebar shell's 'sidebar.leading' declaration (slots.inject
-  // waits for it; declaration collapse disposer re-registers), then mount.
-  ctx.effect(() =>
-    ctx.slots.inject('sidebar.leading', () =>
-      ctx.slots.register(
+  ctx.effect(() => ctx.locale.register(SETTINGS_NS, settingsLocale), 'dsh-token-usage-sidebar: locale');
+  const t = ctx.locale.bind(SETTINGS_NS) as (key: string) => string;
+  ctx.effect(() => {
+    let slotMounted = false;
+    let fallbackDispose: (() => void) | undefined;
+    const fallbackTimer = window.setTimeout(() => {
+      if (!slotMounted) fallbackDispose = mountLegacySidebarFallback();
+    }, 400);
+    const slotDispose = ctx.slots.inject('sidebar.leading', () => {
+      slotMounted = true;
+      window.clearTimeout(fallbackTimer);
+      fallbackDispose?.();
+      fallbackDispose = undefined;
+      return ctx.slots.register(
         {
           name: 'sidebar.leading',
           registrant: 'dsh-token-usage-sidebar',
           inject: () => ({}),
         },
         TokenUsageSidebar,
-      ),
-    ),
-    'dsh-token-usage-sidebar: sidebar.leading slot registration',
-  );
+      );
+    });
+    return () => {
+      window.clearTimeout(fallbackTimer);
+      fallbackDispose?.();
+      slotDispose?.();
+    };
+  }, 'dsh-token-usage-sidebar: sidebar placement');
+  ctx.slots.inject('settings.section', () => ctx.slots.register(
+    {
+      name: 'settings.section', id: 'token-usage', order: 25,
+      label: () => t('nav'), locale: SETTINGS_NS,
+      inject: () => ({ t }),
+    },
+    () => <TokenUsageSettings t={t} />,
+  ));
 }
