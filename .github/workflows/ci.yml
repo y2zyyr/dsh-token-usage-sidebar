@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test-build:
+    name: test & build (reproducible artifacts)
+    runs-on: ubuntu-latest
+    strategy:
+      # src uses node:zlib zstdCompressSync (added Node 22.5), so 22 is the
+      # effective minimum; 24 is the current LTS we also verify against.
+      matrix:
+        node: [ '22', '24' ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      # Release blocker: committed generated artifacts must match this build.
+      - name: Assert generated artifacts match source
+        run: git diff --exit-code

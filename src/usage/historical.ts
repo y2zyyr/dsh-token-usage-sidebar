@@ -16,7 +16,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import { collectSessionUsage } from './collector.ts';
-import { foldRecords, hasRecord, type LedgerState } from './ledger.ts';
+import { foldRecords, hasRecord, recomputeSourceSplit, type LedgerState } from './ledger.ts';
 import type { RecoveryMetadata, UsageSourceType } from './types.ts';
 
 // v4 replays the durable union once to fill v1.0 bucket and model metadata.
@@ -115,13 +115,18 @@ export function parseSessionLog(lines: string): { sessionId: string; events: { t
   return { sessionId, events };
 }
 
-/** Recovery status: whether the sessions root is enumerable (all logs present). */
-export function deriveRecoveryStatus(sessionsDir: string): RecoveryMetadata['recoveryStatus'] {
+/**
+ * v1.0.1: source-scan mechanics for the file-backed path.
+ * A readable sessions root does NOT prove full lifetime coverage — it only says
+ * the plugin could attempt an enumeration. Scan mechanics are reported
+ * separately from coverage (recoveryStatus) so the plugin never overclaims.
+ */
+export function deriveRecoveryStatus(sessionsDir: string): RecoveryMetadata['sourceScanStatus'] {
   try {
     readdirSync(sessionsDir);
-    return 'complete';
+    return 'complete'; // the root is enumerable; read results still tracked per-session
   } catch {
-    return 'unknown';
+    return 'unknown'; // cannot even enumerate the root
   }
 }
 
@@ -144,19 +149,38 @@ export interface HistoricalMigrationResult {
     lifetimeTotal: number;
     earliestRecoveredAt?: number;
     latestRecoveredAt?: number;
+    /** v1.0.1: scan mechanics — how many sessions were enumerated/read/failed. */
+    sessionsDiscovered?: number;
+    sessionsReadSuccessfully?: number;
+    sessionsReadFailed?: number;
+    /** v1.0.1: source scan mechanics, never conflated with coverage. */
+    sourceScanStatus?: RecoveryMetadata['sourceScanStatus'];
+    /** v1.0.1: lifetime coverage (partial unless scan complete AND no pre-tracking gap). */
     recoveryStatus?: RecoveryMetadata['recoveryStatus'];
   };
 }
 
 /**
  * Run the v0.2 historical recovery migration (idempotent).
- * If already completed (schemaVersion >= 2 with recovery metadata) it is a no-op
- * unless `force` is set. Meres every authoritative record into the ledger
- * without resetting or dropping existing live records.
+ * If already verified under v1.0.1 semantics (schemaVersion >= 2 with both
+ * recoveryStatus AND sourceScanStatus metadata) it is a no-op unless `force`
+ * is set; a legacy 'complete' recoveryStatus alone is NOT enough to skip the
+ * scan (§19). Meres every authoritative record into the ledger without
+ * resetting or dropping existing live records.
  */
 export async function runHistoricalMigration(ledger: LedgerState, opts?: HistoricalMigrationOptions): Promise<HistoricalMigrationResult> {
   const now = opts?.now ?? Date.now();
-  const already = (ledger.schemaVersion ?? 0) >= HISTORICAL_MIGRATION_VERSION && ledger.recovery?.recoveryStatus !== undefined && !opts?.force;
+  // v1.0.1 §19: a ledger is only "already scanned" when it carries v1.0.1 scan
+  // evidence. A legacy ledger that predates sourceScanStatus may have
+  // recovery.recoveryStatus = 'complete' written under the OLD coarse semantics
+  // ("sessions root enumerable"), which must not be presented as proof of full
+  // lifetime coverage. Requiring sourceScanStatus !== undefined forces the
+  // idempotent scan to build honest v1.0.1 evidence (and heal any stale
+  // live/historical split) before re-exposing 'complete'.
+  const already = (ledger.schemaVersion ?? 0) >= HISTORICAL_MIGRATION_VERSION
+    && ledger.recovery?.recoveryStatus !== undefined
+    && ledger.recovery?.sourceScanStatus !== undefined
+    && !opts?.force;
   if (already) {
     return { migrated: false, ledger, summary: summarize(ledger) };
   }
@@ -171,17 +195,24 @@ export async function runHistoricalMigration(ledger: LedgerState, opts?: Histori
 
   let next = ledger;
 
+  // v1.0.1: track scan mechanics honestly. Derived statuses never conflate
+  // "all discoverable sessions read" with "full lifetime coverage".
   let sessions: HistoricalSession[];
+  let listError = false;
   try {
     sessions = await reader.list();
   } catch {
     sessions = [];
+    listError = true;
   }
   if (!Array.isArray(sessions)) sessions = [];
 
   let earliest: number | undefined;
   let latest: number | undefined;
   let sessionsScanned = 0;
+  let sessionsDiscovered = sessions.length;
+  let sessionsReadSuccessfully = 0;
+  let sessionsReadFailed = 0;
   const diskSeen = new Set<string>();
   const newRecords: { id: string; token: number }[] = [];
 
@@ -190,10 +221,16 @@ export async function runHistoricalMigration(ledger: LedgerState, opts?: Histori
     try {
       parsed = await reader.readEvents(s.id);
     } catch {
+      sessionsReadFailed += 1; // a discovered session that cannot be read
       continue;
     }
-    if (!parsed || !parsed.sessionId || parsed.events.length === 0) continue;
+    if (!parsed || !parsed.sessionId || parsed.events.length === 0) {
+      // Discovered but unreadable/empty — do not count as a successful scan.
+      sessionsReadFailed += 1;
+      continue;
+    }
     sessionsScanned += 1;
+    sessionsReadSuccessfully += 1;
     const recs = collectSessionUsage({
       sessionId: parsed.sessionId,
       events: parsed.events,
@@ -232,6 +269,41 @@ export async function runHistoricalMigration(ledger: LedgerState, opts?: Histori
     if (changed) next = { ...next, src, liveRecordedTotal: live };
   }
 
+  // v1.0.1 invariant (§17): recompute the live/historical split from byId + src
+  // so the cached split fields always satisfy
+  // lifetimeTotal === liveRecordedTotal + historicalRecoveredTotal, healing any
+  // drift a prior migration left behind.
+  next = recomputeSourceSplit(next);
+
+  // v1.0.1 status derivation (never overclaims):
+  //   sourceScanStatus = whether every DISCOVERABLE source was read successfully.
+  //   recoveryStatus    = whether we can ASSERT full lifetime coverage.
+  let sourceScanStatus: RecoveryMetadata['sourceScanStatus'] = 'unknown';
+  if (listError) {
+    sourceScanStatus = 'failed';       // enumeration itself threw
+  } else if (sessionsReadFailed > 0) {
+    sourceScanStatus = 'partial';      // some discoverable sessions could not be read
+  } else {
+    sourceScanStatus = 'complete';     // enumerated set fully read (incl. empty set)
+  }
+
+  // Lifetime coverage can only be 'complete' if (a) we actually scanned every
+  // discoverable source AND (b) provenance shows coverage from tracking start
+  // (earliest recovered >= tracking start => no pre-tracking gap). Otherwise it
+  // stays 'partial' (recovered some, cannot prove all) or 'unknown' (nothing).
+  let recoveryStatus: RecoveryMetadata['recoveryStatus'] = 'unknown';
+  const trackingStart = ledger.recovery?.trackingStartDate;
+  if (listError && sessionsReadSuccessfully === 0 && newRecords.length === 0) {
+    recoveryStatus = 'unknown';
+  } else if (sourceScanStatus === 'complete' && trackingStart && earliest !== undefined) {
+    const startMs = Date.parse(trackingStart + 'T00:00:00');
+    recoveryStatus = !Number.isNaN(startMs) && earliest >= startMs ? 'complete' : 'partial';
+  } else {
+    recoveryStatus = (sessionsReadSuccessfully > 0 || newRecords.length > 0)
+      ? 'partial'
+      : 'unknown';
+  }
+
   const recovery: RecoveryMetadata = {
     trackingStartDate: ledger.recovery?.trackingStartDate,
     earliestRecoveredAt: earliest,
@@ -240,14 +312,11 @@ export async function runHistoricalMigration(ledger: LedgerState, opts?: Histori
     recoveryCompletedAt: now,
     recoverySources: ['durable_session_logs', 'session_persistence'],
     recoveredRecordCount: next.historicalRecoveredRecordCount ?? newRecords.length,
-    recoveryStatus: await (async () => {
-      try {
-        const rd = opts?.reader ? sessions : [];
-        return sessions.length > 0 ? 'complete' : 'partial';
-      } catch {
-        return 'unknown';
-      }
-    })(),
+    sourceScanStatus,
+    recoveryStatus,
+    sessionsDiscovered,
+    sessionsReadSuccessfully,
+    sessionsReadFailed,
   };
   next = { ...next, schemaVersion: HISTORICAL_MIGRATION_VERSION, recovery };
 
@@ -263,19 +332,28 @@ export async function runHistoricalMigration(ledger: LedgerState, opts?: Histori
       lifetimeTotal: next.lifetimeTotal,
       earliestRecoveredAt: earliest,
       latestRecoveredAt: latest,
-      recoveryStatus: recovery.recoveryStatus,
+      sessionsDiscovered,
+      sessionsReadSuccessfully,
+      sessionsReadFailed,
+      sourceScanStatus,
+      recoveryStatus,
     },
   };
 }
 
 function summarize(ledger: LedgerState): HistoricalMigrationResult['summary'] {
+  const rec = ledger.recovery;
   return {
     migrated: false,
-    sessionsScanned: 0,
+    sessionsScanned: rec?.sessionsReadSuccessfully ?? 0,
     recordsFound: 0,
     recoveredTokens: ledger.historicalRecoveredTotal ?? 0,
     liveTokens: ledger.liveRecordedTotal ?? 0,
     lifetimeTotal: ledger.lifetimeTotal,
-    recoveryStatus: ledger.recovery?.recoveryStatus,
+    sessionsDiscovered: rec?.sessionsDiscovered ?? 0,
+    sessionsReadSuccessfully: rec?.sessionsReadSuccessfully ?? 0,
+    sessionsReadFailed: rec?.sessionsReadFailed ?? 0,
+    sourceScanStatus: rec?.sourceScanStatus,
+    recoveryStatus: rec?.recoveryStatus,
   };
 }

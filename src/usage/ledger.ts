@@ -234,6 +234,36 @@ export function hasRecord(ledger: LedgerState, id: string): boolean {
   return Object.prototype.hasOwnProperty.call(ledger.byId, id);
 }
 
+/**
+ * v1.0.1 invariant (§17): recompute the live/historical source split directly
+ * from byId + src, so the additive identity
+ *   lifetimeTotal === liveRecordedTotal + historicalRecoveredTotal
+ * always holds even if a prior migration left the cached split fields stale.
+ * byId/src are the authoritative source of truth for attribution.
+ */
+export function recomputeSourceSplit(ledger: LedgerState): LedgerState {
+  const src = ledger.src ?? {};
+  let live = 0;
+  let historical = 0;
+  let historicalCount = 0;
+  for (const [id, total] of Object.entries(ledger.byId)) {
+    const s = src[id];
+    if (s === 'live_event' || s === 'other' || s === undefined) live += total;
+    else { historical += total; historicalCount += 1; }
+  }
+  if (live === (ledger.liveRecordedTotal ?? 0)
+      && historical === (ledger.historicalRecoveredTotal ?? 0)
+      && historicalCount === (ledger.historicalRecoveredRecordCount ?? 0)) {
+    return ledger;
+  }
+  return {
+    ...ledger,
+    liveRecordedTotal: live,
+    historicalRecoveredTotal: historical,
+    historicalRecoveredRecordCount: historicalCount,
+  };
+}
+
 export function rebuild(records: readonly UsageRecord[], now = Date.now()): LedgerState {
   return foldRecords(emptyLedger(now), records);
 }

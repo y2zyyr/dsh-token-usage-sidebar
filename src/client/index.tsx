@@ -174,10 +174,37 @@ html[data-dsh-desktop=true] .dtsu-w{border-color:transparent}
 // Older DSH Web shells do not declare `sidebar.leading`. Keep the official
 // slot path below as the preferred integration, but mount immediately before
 // DSH's own New Session button when that slot never becomes available.
+//
+// Hardened v1.0.1 fallback (§23-24): never mis-mount on just any button that
+// happens to contain a <span>. The secondary fallback requires BOTH
+// sidebar-context ancestry AND an aria-label keyword, so a non-sidebar button
+// is never treated as DSH's New Session button. If no confident candidate
+// exists, we return undefined (mount nothing) rather than guess wrong.
+function hasSidebarAncestry(button: HTMLButtonElement): boolean {
+  let node: Element | null = button.parentElement;
+  let depth = 0;
+  while (node && depth < 12) {
+    const cls = typeof node.className === 'string' ? node.className : '';
+    if (/sidebar|newSession|left-nav|session-list/i.test(cls)) return true;
+    node = node.parentElement;
+    depth += 1;
+  }
+  return false;
+}
+
+function isLikelyNewSessionButton(button: HTMLButtonElement): boolean {
+  if (typeof button.className === 'string' && button.className.includes('newSession')) return true;
+  if (!hasSidebarAncestry(button)) return false;
+  const label = (button.getAttribute('aria-label') ?? '').toLowerCase().replace(/\s+/g, '');
+  if (!label) return false;
+  return /new|session|neues|会话|新建/.test(label);
+}
+
 function findNewSessionButton(): HTMLButtonElement | undefined {
   const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('button'));
-  return buttons.find((button) => String(button.className).includes('newSession'))
-    ?? buttons.find((button) => button.hasAttribute('aria-label') && button.querySelector('span') !== null);
+  const exact = buttons.filter((b) => typeof b.className === 'string' && b.className.includes('newSession'));
+  if (exact.length > 0) return exact[0];
+  return buttons.find(isLikelyNewSessionButton);
 }
 
 function mountLegacySidebarFallback(): () => void {

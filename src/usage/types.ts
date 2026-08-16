@@ -83,7 +83,22 @@ export interface UsageProvenance {
   readonly migrationVersion?: number;
 }
 
-/** Tracking metadata persisted with the ledger (§23). */
+/** Metadata about how well the historical scan actually enumerated DSH state. */
+export type SourceScanStatus = 'complete' | 'partial' | 'failed' | 'unknown';
+
+/**
+ * Tracking metadata persisted with the ledger. The two status fields are
+ * deliberately distinct (v1.0.1):
+ *
+ * - sourceScanStatus reflects the MECHANICS of the enumerating scan: whether
+ *   every source that the plugin could enumerate was actually read successfully.
+ *   A scan with any read failure is 'partial' (or 'failed' if none could be read).
+ * - recoveryStatus reflects COVERAGE — whether we can ASSERT that the recovered
+ *   records represent the plugin's full authoritative history. Because DSH does
+ *   not guarantee that today's enumerated sessions equal all past DSH usage,
+ *   full lifetime coverage can almost never be proven; the value stays 'partial'
+ *   unless the scan was complete AND provenance shows no pre-tracking gap.
+ */
 export interface RecoveryMetadata {
   /** Date the plugin began authoritative tracking (installation date). */
   readonly trackingStartDate?: string;
@@ -99,8 +114,16 @@ export interface RecoveryMetadata {
   readonly recoverySources?: readonly string[];
   /** Number of distinct historical invocations recovered (not overlapped by live). */
   readonly recoveredRecordCount?: number;
-  /** COMPLETE | PARTIAL | UNKNOWN relative to recoverable authoritative history. */
+  /** COMPLETE | PARTIAL | UNKNOWN — source scan mechanics (v1.0.1). */
+  readonly sourceScanStatus?: SourceScanStatus;
+  /** COMPLETE | PARTIAL | UNKNOWN — lifetime historical coverage (v1.0.1). */
   readonly recoveryStatus?: 'complete' | 'partial' | 'unknown';
+  /** How many persisted sessions the scan could enumerate. */
+  readonly sessionsDiscovered?: number;
+  /** How many enumerated sessions were read successfully. */
+  readonly sessionsReadSuccessfully?: number;
+  /** How many enumerated sessions failed to read (skipped, never crash). */
+  readonly sessionsReadFailed?: number;
 }
 /** The current local calendar day in the host process timezone. */
 export function currentLocalDate(now: number = Date.now()): LocalDate {

@@ -211,3 +211,182 @@ test('synchronizeToday derives only reliably dated records after historical repl
   assert.equal(totalForDay(ledger, DAY('2026-08-14')), 50);
   assert.equal(totalForDay(ledger, DAY('2026-08-15')), 0);
 });
+// ── v1.0.1 shutdown persistence (P0) ────────────────────────────────────────
+// BUG-REGRESSION: close() previously set closed=true BEFORE flush(), so a
+// dirty ledger pending in the debounce window was never persisted. This test
+// proves that applying usage and closing immediately (no manual flush) still
+// persists the record across an aggregator restart.
+test('shutdown: apply then immediate close() persists the dirty record', async () => {
+  const store = new MemoryUsageStore();
+  const agg = new UsageAggregator({ store, now: () => Date.parse('2026-08-16T12:00:00') });
+  await agg.start();
+  agg.apply([rec('shutdown:sess:1:0', 14174, DAY('2026-08-16'))]);
+  // NO manual flush() — close must flush the pending debounce write.
+  await agg.close();
+  assert.equal(store.writes, 1, 'close must have flushed exactly once');
+  const agg2 = new UsageAggregator({ store, now: () => Date.parse('2026-08-16T12:01:00') });
+  await agg2.start();
+  assert.equal(agg2.aggregate.lifetimeTotal, 14174, 'record survived shutdown');
+  assert.equal(agg2.aggregate.recordCount, 1);
+  await agg2.close();
+});
+
+test('shutdown: multiple close() calls are safe (no error, no double save drop)', async () => {
+  const store = new MemoryUsageStore();
+  const agg = new UsageAggregator({ store });
+  await agg.start();
+  agg.apply([rec('m:sess:1:0', 999, DAY('2026-08-16'))]);
+  await agg.close();
+  await agg.close(); // second close is a no-op
+  assert.ok(true, 'no throw on repeated close');
+  const agg2 = new UsageAggregator({ store });
+  await agg2.start();
+  assert.equal(agg2.aggregate.lifetimeTotal, 999);
+  await agg2.close();
+});
+
+test('shutdown: concurrent flush + close do not race or double-save-drop', async () => {
+  const store = new MemoryUsageStore();
+  const agg = new UsageAggregator({ store });
+  await agg.start();
+  agg.apply([rec('c:sess:1:0', 5000, DAY('2026-08-16'))]);
+  // Fire flush and close concurrently; whichever runs, the dirty write must land.
+  await Promise.all([agg.flush(), agg.close()]);
+  const agg2 = new UsageAggregator({ store });
+  await agg2.start();
+  assert.equal(agg2.aggregate.lifetimeTotal, 5000);
+  await agg2.close();
+});
+
+test('shutdown: persist failure keeps dirty recoverable for a later flush', async () => {
+  let failNext = true;
+  const store = {
+    writes: 0,
+    async load() { return undefined; },
+    async save() { if (failNext) { failNext = false; throw new Error('disk full'); } this.writes += 1; },
+  };
+  const agg = new UsageAggregator({ store });
+  await agg.start();
+  agg.apply([rec('f:sess:1:0', 2024, DAY('2026-08-16'))]);
+  await agg.flush(); // save throws; dirty must remain set
+  assert.equal(store.writes, 0, 'failed save did not count');
+  await agg.flush(); // second flush retries and succeeds
+  assert.equal(store.writes, 1, 'recoverable after transient failure');
+  await agg.close();
+});
+
+test('shutdown: close() after a failed debounce flush does not lose data on retry', async () => {
+  let value;
+  let failNext = true;
+  const store = {
+    writes: 0,
+    async load() { return value; },
+    async save(l) { if (failNext) { failNext = false; throw new Error('temporary'); } value = l; this.writes += 1; },
+  };
+  const agg = new UsageAggregator({ store });
+  await agg.start();
+  agg.apply([rec('f2:sess:1:0', 31415, DAY('2026-08-16'))]);
+  await agg.flush(); // transient failure: dirty restored
+  assert.equal(store.writes, 0, 'failed save did not persist');
+  await agg.close(); // flush-before-close retries and must persist
+  assert.equal(store.writes, 1, 'close retried and wrote the recovered snapshot');
+  const agg2 = new UsageAggregator({ store });
+  await agg2.start();
+  assert.equal(agg2.aggregate.lifetimeTotal, 31415, 'record survived failed-flush then close');
+  await agg2.close();
+});
+// ── v1.0.1 ledger consistency invariants (§17) ─────────────────────────────
+function assertLedgerInvariants(ledger, label) {
+  const byIds = Object.keys(ledger.byId ?? {});
+  assert.equal(ledger.recordCount, byIds.length, label + ': recordCount === byId.size');
+  const sum = byIds.reduce((a, id) => a + ledger.byId[id], 0);
+  assert.equal(ledger.lifetimeTotal, sum, label + ': lifetimeTotal === sum(byId)');
+  assert.equal(ledger.lifetimeTotal, (ledger.liveRecordedTotal ?? 0) + (ledger.historicalRecoveredTotal ?? 0),
+    label + ': lifetimeTotal === liveRecordedTotal + historicalRecoveredTotal');
+  for (const map of [ledger.dayBy, ledger.seqBy, ledger.detailBy, ledger.src]) {
+    for (const k of Object.keys(map ?? {})) {
+      assert.ok(Object.prototype.hasOwnProperty.call(ledger.byId, k), label + ': ' + (map === ledger.src ? 'src' : 'map') + ' id ⊆ byId');
+    }
+  }
+}
+
+test('ledger invariants hold after sequential recording and replacement', () => {
+  let l = emptyLedger();
+  l = recordUsage(l, rec('s1:1:0', 1000, DAY('2026-08-16'), 1, { sourceType: 'live_event' }));
+  l = recordUsage(l, rec('s1:1:1', 2000, DAY('2026-08-16'), 1, { sourceType: 'session_log' }));
+  l = recordUsage(l, rec('s1:1:1', 2500, DAY('2026-08-16'), 9, { sourceType: 'session_log' })); // replace
+  assertLedgerInvariants(l, 'after replacement');
+});
+
+test('foldRecords preserves the source-split invariant across enrichments', () => {
+  const mk = (id, total, seq, st) => ({ ...rec(id, total, DAY('2026-08-16'), seq), sourceType: st });
+  let l = foldRecords(emptyLedger(), [mk('s:1:0', 100, 5, 'session_log')]);
+  l = foldRecords(l, [mk('s:1:0', 180, 9, 'session_log')]); // higher-seq enrichment
+  assertLedgerInvariants(l, 'after session_log enrichment');
+  assert.equal(l.liveRecordedTotal, 0);
+  assert.equal(l.historicalRecoveredTotal, 180);
+});
+
+test('recomputeSourceSplit heals a stale cached split field', async () => {
+  const { recomputeSourceSplit } = await import('../src/usage/ledger.ts');
+  // Simulate drift: byId says 300 historical, but the cached field says 100.
+  const l = {
+    lifetimeTotal: 300,
+    todayTotal: 300,
+    todayDate: DAY('2026-08-16'),
+    byId: { a: 100, b: 200 },
+    recordCount: 2,
+    src: { a: 'live_event', b: 'session_log' },
+    liveRecordedTotal: 100,
+    historicalRecoveredTotal: 100, // stale: should be 200
+    historicalRecoveredRecordCount: 0, // stale: should be 1
+    schemaVersion: 4,
+  };
+  const healed = recomputeSourceSplit(l);
+  assert.equal(healed.liveRecordedTotal, 100);
+  assert.equal(healed.historicalRecoveredTotal, 200);
+  assert.equal(healed.historicalRecoveredRecordCount, 1);
+  assertLedgerInvariants(healed, 'healed');
+});
+// ── v1.0.1 invalid-store / no-silent-reset (§18, §41) ──────────────────────
+test('invalid persisted ledger reports invalid instead of silently resetting to 0', async () => {
+  const rawCorrupt = { lifetimeTotal: 999999, todayTotal: 'not-a-number', byId: 42, recordCount: 7 };
+  const store = {
+    writes: 0,
+    savedLedger: undefined,
+    async load() { return { status: 'invalid' }; }, // store found a corrupt row
+    async save(l) { this.savedLedger = l; this.writes += 1; },
+  };
+  const agg = new UsageAggregator({ store });
+  await agg.start();
+  // Must NOT present the corrupt totals; must surface invalid state.
+  assert.equal(agg.diagnostics().loadStatus, 'invalid');
+  assert.equal(agg.aggregate.lifetimeTotal, 0, 'in-memory totals start empty rather than echoing corrupt data');
+  assert.equal(store.writes, 0, 'corrupt source is never overwritten by a silent reset');
+  await agg.close();
+});
+
+test('absent ledger (none) starts fresh and is not mislabeled invalid', async () => {
+  const store = {
+    async load() { return undefined; }, // legacy shorthand: nothing persisted
+    async save() {},
+  };
+  const agg = new UsageAggregator({ store });
+  await agg.start();
+  assert.equal(agg.diagnostics().loadStatus, 'none');
+  assert.equal(agg.aggregate.lifetimeTotal, 0);
+  await agg.close();
+});
+
+test('ok ledger loads normally with validate-outcome store', async () => {
+  const ledger = { lifetimeTotal: 500, todayTotal: 500, todayDate: DAY('2026-08-16'), byId: { a: 500 }, recordCount: 1, schemaVersion: 4 };
+  const store = {
+    async load() { return { status: 'ok', ledger }; },
+    async save() {},
+  };
+  const agg = new UsageAggregator({ store });
+  await agg.start();
+  assert.equal(agg.diagnostics().loadStatus, 'ok');
+  assert.equal(agg.aggregate.lifetimeTotal, 500);
+  await agg.close();
+});

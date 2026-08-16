@@ -355,9 +355,29 @@ html[data-dsh-desktop=true] .dtsu-w{border-color:transparent}
       ] })
     ] });
   }
+  function hasSidebarAncestry(button) {
+    let node = button.parentElement;
+    let depth = 0;
+    while (node && depth < 12) {
+      const cls = typeof node.className === "string" ? node.className : "";
+      if (/sidebar|newSession|left-nav|session-list/i.test(cls)) return true;
+      node = node.parentElement;
+      depth += 1;
+    }
+    return false;
+  }
+  function isLikelyNewSessionButton(button) {
+    if (typeof button.className === "string" && button.className.includes("newSession")) return true;
+    if (!hasSidebarAncestry(button)) return false;
+    const label = (button.getAttribute("aria-label") ?? "").toLowerCase().replace(/\s+/g, "");
+    if (!label) return false;
+    return /new|session|neues|会话|新建/.test(label);
+  }
   function findNewSessionButton() {
     const buttons = Array.from(document.querySelectorAll("button"));
-    return buttons.find((button) => String(button.className).includes("newSession")) ?? buttons.find((button) => button.hasAttribute("aria-label") && button.querySelector("span") !== null);
+    const exact = buttons.filter((b) => typeof b.className === "string" && b.className.includes("newSession"));
+    if (exact.length > 0) return exact[0];
+    return buttons.find(isLikelyNewSessionButton);
   }
   function mountLegacySidebarFallback() {
     if (typeof document === "undefined" || !document.body) return () => {

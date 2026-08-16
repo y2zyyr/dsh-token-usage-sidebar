@@ -9,6 +9,7 @@ import { emptyLedger, foldRecords, synchronizeToday, type LedgerState } from './
 import { aggregateOf, type UsageAggregate } from './ledger.ts';
 import { currentLocalDate, type UsageRecord } from './types.ts';
 import type { UsageStore } from './store.ts';
+import { normalizeLoad } from './store.ts';
 import { runHistoricalMigration, type HistoricalReader } from './historical.ts';
 import { totalForOffset } from './ledger.ts';
 import { buildUsageInsights, type InsightRange, type UsageInsights } from './insights.ts';
@@ -38,6 +39,12 @@ export class UsageAggregator {
   private dirty = false;
   private closed = false;
   private loading = true;
+  /** Serial save chain: guarantees saves are ordered and never concurrent. */
+  private saveChain: Promise<void> | undefined;
+  /** True while a flush's store.save is in flight (coalesces concurrent flushes). */
+  private flushing = false;
+  /** v1.0.1: result of loading the persisted ledger (none | ok | invalid). */
+  private loadOutcome: 'none' | 'ok' | 'invalid' = 'none';
 
   constructor(opts: AggregatorOptions) {
     this.store = opts.store;
@@ -48,11 +55,32 @@ export class UsageAggregator {
     this.ledger = emptyLedger(this.now());
   }
 
-  /** Load persisted state. Call once before first read. */
+  /**
+   * Load persisted state. Call once before first read.
+   * v1.0.1 (§18, §41): a corrupt/invalid persisted ledger must NEVER silently
+   * reset the totals to zero. We distinguish:
+   *   - 'none'    -> nothing persisted yet -> start fresh (correct).
+   *   - 'ok'      -> validated ledger loaded.
+   *   - 'invalid' -> a row exists but failed validation -> warn loudly, keep an
+   *                  empty in-memory ledger for live use, and NEVER overwrite
+   *                  the corrupt on-disk source in place of a silent reset.
+   * The driver calls log() whenever a legacy store.load() returned undefined
+   * solely because nothing existed; corruption is surfaced through diagnostics().
+   */
   async start(): Promise<void> {
-    const persisted = await this.store.load();
-    if (persisted) this.ledger = this.normalizeDay(persisted);
-    else this.ledger = emptyLedger(this.now());
+    const outcome = normalizeLoad(await this.store.load());
+    if (outcome.status === 'ok') {
+      this.loadOutcome = 'ok';
+      this.ledger = this.normalizeDay(outcome.ledger);
+    } else if (outcome.status === 'invalid') {
+      this.loadOutcome = 'invalid';
+      console.warn('[dsh-token-usage-sidebar] persisted ledger failed validation; '
+        + 'refusing to reset totals to zero. Prior history is unavailable until the '
+        + 'store is recovered.');
+    } else {
+      this.loadOutcome = 'none';
+      this.ledger = emptyLedger(this.now());
+    }
     this.loading = false;
     this.notify();
   }
@@ -114,6 +142,7 @@ export class UsageAggregator {
     const todayYmd = this.ledger.todayDate;
     const yesterday = totalForOffset(this.ledger, 1);
     return {
+      loadStatus: this.loadOutcome,
       todayTotal: this.ledger.todayTotal,
       todayDate: todayYmd,
       yesterdayTotal: yesterday.total,
@@ -130,7 +159,11 @@ export class UsageAggregator {
       recoveryVersion: this.ledger.recovery?.recoveryVersion ?? undefined,
       recoveryCompletedAt: this.ledger.recovery?.recoveryCompletedAt ?? undefined,
       recoverySources: this.ledger.recovery?.recoverySources ?? undefined,
+      sourceScanStatus: this.ledger.recovery?.sourceScanStatus ?? undefined,
       recoveryStatus: this.ledger.recovery?.recoveryStatus ?? undefined,
+      sessionsDiscovered: this.ledger.recovery?.sessionsDiscovered ?? undefined,
+      sessionsReadSuccessfully: this.ledger.recovery?.sessionsReadSuccessfully ?? undefined,
+      sessionsReadFailed: this.ledger.recovery?.sessionsReadFailed ?? undefined,
       trackingStartDate: this.ledger.recovery?.trackingStartDate,
     };
   }
@@ -164,6 +197,7 @@ export class UsageAggregator {
   }
 
   private schedulePersist(): void {
+    if (this.closed) return; // never schedule after shutdown
     this.dirty = true;
     if (this.persistTimer !== undefined) return;
     this.persistTimer = setTimeout(() => {
@@ -172,18 +206,55 @@ export class UsageAggregator {
     }, this.persistDebounceMs);
   }
 
-  /** Flush the debounced persistence (also callable on dispose). */
+  /**
+   * Flush the debounced persistence. Serializes saves on a single chain so two
+   * saves never run concurrently and an older ledger snapshot never lands after
+   * a newer one. On failure the ledger stays dirty so a later flush/close
+   * retries; a transient failure therefore never loses a write.
+   */
   async flush(): Promise<void> {
     if (this.persistTimer !== undefined) { clearTimeout(this.persistTimer); this.persistTimer = undefined; }
-    if (!this.dirty || this.closed) return;
+    // Nothing dirty to write (e.g. already flushed, or a concurrent flush won
+    // the race and consumed the dirty flag). While flushing, coalesce.
+    if (!this.dirty || this.flushing) return;
+    const snapshot = this.ledger; // immutable ref; a later apply() swaps in a new one
     this.dirty = false;
-    try { await this.store.save(this.ledger); }
-    catch (e) { console.error('[dsh-token-usage-sidebar] persist failed', e); this.dirty = true; }
+    this.flushing = true;
+    // Enqueue this snapshot's save onto the chain; the previous task must finish
+    // first so save order always matches apply order.
+    const run = async (): Promise<void> => {
+      try {
+        await this.store.save(snapshot);
+      } catch (e) {
+        console.error('[dsh-token-usage-sidebar] persist failed', e);
+        // Restore dirtiness so a later flush (or close) retries the write.
+        this.dirty = true;
+      }
+    };
+    const prev = this.saveChain ?? Promise.resolve();
+    const next = prev.then(run, run);
+    this.saveChain = next;
+    try {
+      await next;
+    } finally {
+      this.flushing = false;
+      if (this.saveChain === next) this.saveChain = undefined;
+    }
   }
 
+  /**
+   * Shutdown. P0 invariant: DIRTY_DATA_MUST_BE_FLUSHED_BEFORE_STORE_CLOSE.
+   * We flush while still open (so the dirty check passes), then mark closed,
+   * drain the serial save chain, detach listeners, and only then close the
+   * underlying store. Idempotent: repeated close() is a no-op.
+   */
   async close(): Promise<void> {
-    this.closed = true;
+    if (this.closed) return;
+    // Flush BEFORE closed=true so the dirty write is not skipped by the guard.
     await this.flush();
+    this.closed = true;
+    // Drain any in-flight/queued save so a final store.close() never races it.
+    if (this.saveChain) await this.saveChain;
     this.listeners.clear();
     if (this.store.close) await this.store.close();
   }

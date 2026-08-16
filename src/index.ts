@@ -65,7 +65,11 @@ const LedgerSchema = z.object({
     recoveryCompletedAt: z.number().optional(),
     recoverySources: z.array(z.string()).optional(),
     recoveredRecordCount: z.number().optional(),
+    sourceScanStatus: z.enum(['complete','partial','failed','unknown']).optional(),
     recoveryStatus: z.enum(['complete','partial','unknown']).optional(),
+    sessionsDiscovered: z.number().int().nonnegative().optional(),
+    sessionsReadSuccessfully: z.number().int().nonnegative().optional(),
+    sessionsReadFailed: z.number().int().nonnegative().optional(),
   }).optional(),
 });
 
@@ -88,12 +92,16 @@ class DomainLedgerStore implements UsageStore {
     this.domain = await facility.open(ledgerSpec);
     this.table = this.domain.table('ledger');
   }
-  async load(): Promise<LedgerState | undefined> {
+  async load(): Promise<{ status: 'none' } | { status: 'ok'; ledger: LedgerState } | { status: 'invalid' }> {
     const row = this.table?.get(this.key);
-    if (!row) return undefined;
+    if (!row) return { status: 'none' };
     const parsed = LedgerSchema.safeParse(row);
-    if (!parsed.success) return undefined;
-    return parsed.data as unknown as LedgerState;
+    if (!parsed.success) {
+      // Corrupt/invalid persisted ledger: signal 'invalid' so the aggregator can
+      // warn + fail closed instead of silently resetting the totals to zero.
+      return { status: 'invalid' };
+    }
+    return { status: 'ok', ledger: parsed.data as unknown as LedgerState };
   }
   async save(ledger: LedgerState): Promise<void> {
     if (!this.table) throw new Error('ledger domain not open');
