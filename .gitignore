@@ -1,0 +1,19 @@
+# Dependencies and package-manager state
+node_modules/
+
+# DSH runtime data: keep every user ledger and backup private
+.dsh/
+dsh_token_usage_sidebar.json
+dsh_token_usage_sidebar.json.*
+*.bak
+
+# Test/build output
+coverage/
+.nyc_output/
+*.log
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp

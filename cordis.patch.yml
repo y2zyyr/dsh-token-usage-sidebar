@@ -1,0 +1,7 @@
+# dsh-token-usage-sidebar loader patch
+# Adds the plugin as an enabled Loader entry of the web profile. The host half
+# (lib/index.js) is loaded by Cordis; the dsh.client declaration makes the
+# browser half (lib/client.js) a /plugins entry served by dsh-client-modules.
+- insert:
+    - id: token-usage-sidebar
+      name: 'dsh-token-usage-sidebar'
