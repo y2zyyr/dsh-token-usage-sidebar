@@ -4,6 +4,8 @@ English | [简体中文](README.zh-CN.md)
 
 A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) web-profile plugin that keeps provider-reported token usage locally. It provides both a persistent sidebar summary and a native **Token Usage** settings page.
 
+[![npm version](https://img.shields.io/npm/v/@y2zyyr/dsh-token-usage-sidebar)](https://www.npmjs.com/package/@y2zyyr/dsh-token-usage-sidebar)
+
 ```text
 TOKEN USAGE
 Today       …
@@ -42,29 +44,40 @@ This is a community plugin, not an official DeepSeek plugin.
 
 ## Installation
 
-### Ask your agent (recommended)
+Recommended package: `@y2zyyr/dsh-token-usage-sidebar` (published on the npm registry).
 
-Copy this message into an agent that can access your DSH installation:
+### Recommended — DeepSeek Harness
 
-```text
-Please follow https://github.com/y2zyyr/dsh-token-usage-sidebar to install this plugin into DeepSeek Harness's web profile.
-```
-
-Review third-party source before authorizing an agent to install it. Pin a commit when your workflow requires a reproducible dependency revision.
-
-### Manual installation
-
-Install the npm package into the DSH `web` profile, then restart DSH:
+Install the plugin into the DSH `web` profile, then restart DSH:
 
 ```bash
 dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
 # Restart `dsh web` after installation.
 ```
 
-The package is distributed through the npm registry as `@y2zyyr/dsh-token-usage-sidebar`. The GitHub
-repository ([y2zyyr/dsh-token-usage-sidebar](https://github.com/y2zyyr/dsh-token-usage-sidebar))
-remains the source of code, README, issues, and release history, and a direct
-GitHub install also keeps working (`dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar`).
+`dsh plugin` accepts the scoped package name directly; the plugin is added to the
+profile's bundle list and its loader entry keeps the stable id `token-usage-sidebar`.
+You can also ask an agent that can access your DSH installation to install the npm
+package `@y2zyyr/dsh-token-usage-sidebar` into the web profile (source: https://github.com/y2zyyr/dsh-token-usage-sidebar). Review
+third-party source before authorizing an agent to install it. Pin a commit when your
+workflow requires a reproducible dependency revision.
+
+### npm
+
+The package can be installed from npm directly:
+
+```bash
+npm install @y2zyyr/dsh-token-usage-sidebar
+```
+
+### Source
+
+GitHub is the source repository (code, issues, release history, source inspection):
+https://github.com/y2zyyr/dsh-token-usage-sidebar
+
+A direct GitHub install also keeps working
+(`dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar`), but the npm
+scoped package is the recommended distribution channel.
 
 ## Update
 
@@ -73,6 +86,17 @@ Update the installed plugin, then restart DSH:
 ```bash
 dsh plugin --profile web update @y2zyyr/dsh-token-usage-sidebar
 # Restart `dsh web` after updating.
+```
+
+The plugin is versioned on npm with semantic versions.
+
+## Removal
+
+Removing the plugin does not reset its separately persisted local accounting data.
+
+```bash
+dsh plugin --profile web remove @y2zyyr/dsh-token-usage-sidebar
+# Restart `dsh web` after removal.
 ```
 
 ### Upgrading from a v1.1.0 GitHub install
@@ -87,15 +111,6 @@ dsh plugin --profile web remove dsh-token-usage-sidebar
 dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
 # Restart `dsh web` after the switch.
 ```
-
-## Removal
-
-```bash
-dsh plugin --profile web remove @y2zyyr/dsh-token-usage-sidebar
-# Restart `dsh web` after removal.
-```
-
-Removing the plugin does not reset its separately persisted local accounting data.
 
 ## How it works
 

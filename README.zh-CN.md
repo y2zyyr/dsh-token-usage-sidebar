@@ -4,6 +4,8 @@
 
 这是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web Profile 的社区插件，在侧边栏显示由 provider/runtime 上报并持久化保存的 Token 用量，并在原生设置中提供完整的 **Token 用量** 页面。
 
+[![npm version](https://img.shields.io/npm/v/@y2zyyr/dsh-token-usage-sidebar)](https://www.npmjs.com/package/@y2zyyr/dsh-token-usage-sidebar)
+
 ```text
 TOKEN USAGE
 Today       今日
@@ -33,29 +35,39 @@ Total       累计
 
 ## 安装
 
-### 让 Agent 安装（推荐）
+推荐包：`@y2zyyr/dsh-token-usage-sidebar`（已发布到 npm registry）。
 
-将下面这段话直接发送给能够访问你本机 DSH 的 Agent：
+### 推荐方式 — DeepSeek Harness
 
-```text
-请根据 https://github.com/y2zyyr/dsh-token-usage-sidebar ，将这个插件安装到 DeepSeek Harness 的 web profile。
-```
-
-授权 Agent 安装第三方插件前，请先审阅源码；如需可复现的依赖版本，请固定到具体 commit。
-
-### 手动安装
-
-在 DSH 的 `web` profile 中安装 npm 包，然后重启 DSH：
+把 npm 包安装到 DSH 的 `web` profile，然后重启 DSH：
 
 ```bash
 dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
 # 安装后重启 `dsh web`。
 ```
 
-npm 包通过 npm registry 分发，包名为 `@y2zyyr/dsh-token-usage-sidebar`。GitHub 仓库
-([y2zyyr/dsh-token-usage-sidebar](https://github.com/y2zyyr/dsh-token-usage-sidebar))
-仍然是代码、README、issue 与发布历史的来源；直接从 GitHub 安装也仍然可用
-（`dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar`）。
+`dsh plugin` 直接接受 scoped 包名；插件会加入 profile 的 bundle 列表，其 loader entry
+仍保持稳定的 id `token-usage-sidebar`。也可以让能访问你本机 DSH 的 Agent 直接安装
+`@y2zyyr/dsh-token-usage-sidebar` 到 web profile（源码见 https://github.com/y2zyyr/dsh-token-usage-sidebar）。授权第三方插件安装前请先审阅
+源码；如需可复现的依赖版本，请固定到具体 commit。
+
+### npm
+
+也可以直接用 npm 安装：
+
+```bash
+npm install @y2zyyr/dsh-token-usage-sidebar
+```
+
+注意：在 DSH 中安装插件请使用上面的 `dsh plugin` 命令，裸 `npm install` 仅用于
+需要直接以 npm 方式引用该包的项目。
+
+### 源码（Source）
+
+GitHub 仓库是源码、issue 与发布历史的来源（也用于源码审阅）：https://github.com/y2zyyr/dsh-token-usage-sidebar
+
+直接从 GitHub 安装也仍然可用（`dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar`），
+但推荐使用 npm scoped 包作为分发渠道。
 
 ## 更新
 
@@ -64,6 +76,17 @@ npm 包通过 npm registry 分发，包名为 `@y2zyyr/dsh-token-usage-sidebar`�
 ```bash
 dsh plugin --profile web update @y2zyyr/dsh-token-usage-sidebar
 # 更新后重启 `dsh web`。
+```
+
+插件在 npm 上使用语义化版本管理。
+
+## 卸载
+
+卸载插件不会自动清空独立保存的本地用量统计。
+
+```bash
+dsh plugin --profile web remove @y2zyyr/dsh-token-usage-sidebar
+# 卸载后重启 `dsh web`。
 ```
 
 ### 从 v1.1.0（GitHub 安装）升级
@@ -77,15 +100,6 @@ dsh plugin --profile web remove dsh-token-usage-sidebar
 dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
 # 切换后重启 `dsh web`。
 ```
-
-## 卸载
-
-```bash
-dsh plugin --profile web remove @y2zyyr/dsh-token-usage-sidebar
-# 卸载后重启 `dsh web`。
-```
-
-卸载插件不会自动清空独立保存的本地用量统计。
 
 ## 工作方式
 
