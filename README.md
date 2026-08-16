@@ -26,7 +26,7 @@ This is a community plugin, not an official DeepSeek plugin.
 - Replay-safe, deduplicated accounting: an invocation is counted once.
 - Native placement in the DSH web sidebar.
 
-![Token Usage settings page](docs/screenshots/token-usage-settings-v1.0.0.jpeg)
+![Token Usage settings page](docs/screenshots/token-usage-settings-en-v1.0.0.jpeg)
 
 ## Installation
 
