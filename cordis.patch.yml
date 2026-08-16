@@ -2,6 +2,8 @@
 # Adds the plugin as an enabled Loader entry of the web profile. The host half
 # (lib/index.js) is loaded by Cordis; the dsh.client declaration makes the
 # browser half (lib/client.js) a /plugins entry served by dsh-client-modules.
+# The loader entry ID stays 'token-usage-sidebar' across the npm scoped rename so
+# the plugin keeps its runtime identity and existing persisted state.
 - insert:
     - id: token-usage-sidebar
-      name: 'dsh-token-usage-sidebar'
+      name: '@y2zyyr/dsh-token-usage-sidebar'

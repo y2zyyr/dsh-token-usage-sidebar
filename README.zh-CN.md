@@ -45,26 +45,43 @@ Total       累计
 
 ### 手动安装
 
-在 DSH 的 `web` profile 中从 GitHub 安装，然后重启 DSH：
+在 DSH 的 `web` profile 中安装 npm 包，然后重启 DSH：
 
 ```bash
-dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar
+dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
 # 安装后重启 `dsh web`。
 ```
+
+npm 包通过 npm registry 分发，包名为 `@y2zyyr/dsh-token-usage-sidebar`。GitHub 仓库
+([y2zyyr/dsh-token-usage-sidebar](https://github.com/y2zyyr/dsh-token-usage-sidebar))
+仍然是代码、README、issue 与发布历史的来源；直接从 GitHub 安装也仍然可用
+（`dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar`）。
 
 ## 更新
 
 更新已安装的插件后重启 DSH：
 
 ```bash
-dsh plugin --profile web update dsh-token-usage-sidebar
+dsh plugin --profile web update @y2zyyr/dsh-token-usage-sidebar
 # 更新后重启 `dsh web`。
+```
+
+### 从 v1.1.0（GitHub 安装）升级
+
+已有 v1.1.0 安装会完整保留账本。把 profile bundle 从旧包名切换到 scoped 包名即可——
+插件保持相同的 loader entry ID、导出的插件名、client module ID 与 SQLite 账本路径，
+因此无需数据迁移：
+
+```bash
+dsh plugin --profile web remove dsh-token-usage-sidebar
+dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
+# 切换后重启 `dsh web`。
 ```
 
 ## 卸载
 
 ```bash
-dsh plugin --profile web remove dsh-token-usage-sidebar
+dsh plugin --profile web remove @y2zyyr/dsh-token-usage-sidebar
 # 卸载后重启 `dsh web`。
 ```
 
@@ -134,7 +151,7 @@ v1.0.0/v1.0.1 会对可恢复的 DSH 持久会话事件做一次幂等重放，�
 
 ## 兼容性与状态
 
-当前插件版本：**v1.1.0**。
+当前插件版本：**v1.1.1**（npm 包 `@y2zyyr/dsh-token-usage-sidebar`；源码见 GitHub）。
 
 已在支持的运行时（提供 Node 内置 `node:sqlite` 模块）上验证 DeepSeek Harness `0.1.0-rc.6` 的 `web` profile；未声明更广泛的 DSH 版本或操作系统兼容性。已在本地观察到其运行于更新版本的桌面端（如 DSH Desktop 2.0.0 / Node 26），但不做正式声明。
 

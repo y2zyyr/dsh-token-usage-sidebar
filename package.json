@@ -1,6 +1,9 @@
 {
-  "name": "dsh-token-usage-sidebar",
-  "version": "1.1.0",
+  "name": "@y2zyyr/dsh-token-usage-sidebar",
+  "version": "1.1.1",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Persistent Token Usage insights for DeepSeek Harness, backed by a scalable durable SQLite ledger.",
   "type": "module",
   "main": "lib/index.js",

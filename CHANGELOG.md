@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.1 — 2026-08-17
+
+### Distribution
+- Published to the npm registry as a scoped package: @y2zyyr/dsh-token-usage-sidebar.
+  Install and update discovery now use the npm registry; the GitHub repository
+  remains the source of code, README, issues, Git tags, and GitHub Releases.
+- Runtime identity is unchanged by the rename: the Cordis loader entry ID
+  (token-usage-sidebar), the exported plugin name, the client module ID, the
+  settings namespace, the /token-usage/api/* routes, and the persistent
+  SQLite ledger path (~/.dsh/storages/dsh_token_usage_sidebar.sqlite) are all
+  stable, so existing v1.1.0 installs keep their full history when they switch
+  the profile bundle from dsh-token-usage-sidebar to @y2zyyr/dsh-token-usage-sidebar (remove old,
+  add new; no data migration required).
+- Added publishConfig.access = public for the scoped package; no production
+  code or storage semantics changed.
+
 ## 1.1.0 — 2026-08-16
 
 ### Storage architecture

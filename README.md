@@ -54,26 +54,44 @@ Review third-party source before authorizing an agent to install it. Pin a commi
 
 ### Manual installation
 
-Install from GitHub into the DSH `web` profile, then restart DSH:
+Install the npm package into the DSH `web` profile, then restart DSH:
 
 ```bash
-dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar
+dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
 # Restart `dsh web` after installation.
 ```
+
+The package is distributed through the npm registry as `@y2zyyr/dsh-token-usage-sidebar`. The GitHub
+repository ([y2zyyr/dsh-token-usage-sidebar](https://github.com/y2zyyr/dsh-token-usage-sidebar))
+remains the source of code, README, issues, and release history, and a direct
+GitHub install also keeps working (`dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar`).
 
 ## Update
 
 Update the installed plugin, then restart DSH:
 
 ```bash
-dsh plugin --profile web update dsh-token-usage-sidebar
+dsh plugin --profile web update @y2zyyr/dsh-token-usage-sidebar
 # Restart `dsh web` after updating.
+```
+
+### Upgrading from a v1.1.0 GitHub install
+
+Existing v1.1.0 installs keep their complete ledger. Switch the profile bundle
+from the old package name to the scoped one — the plugin keeps the same loader
+entry ID, exported plugin name, client module ID, and SQLite ledger path, so no
+data migration is needed:
+
+```bash
+dsh plugin --profile web remove dsh-token-usage-sidebar
+dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
+# Restart `dsh web` after the switch.
 ```
 
 ## Removal
 
 ```bash
-dsh plugin --profile web remove dsh-token-usage-sidebar
+dsh plugin --profile web remove @y2zyyr/dsh-token-usage-sidebar
 # Restart `dsh web` after removal.
 ```
 
@@ -156,7 +174,7 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
 
 ## Compatibility and Status
 
-Current release: **v1.1.0**.
+Current release: **v1.1.1** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
 
 Verified with DeepSeek Harness `0.1.0-rc.6` and its `web` profile, on a runtime whose
 Node.js provides the built-in `node:sqlite` module (Node with `node:sqlite`).

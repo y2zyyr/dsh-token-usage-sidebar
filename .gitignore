@@ -17,3 +17,6 @@ coverage/
 .idea/
 .vscode/
 *.swp
+
+# Local agent project context — never publish
+AGENTS.md
