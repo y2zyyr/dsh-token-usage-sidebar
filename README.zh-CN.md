@@ -30,14 +30,24 @@ Total       累计
 
 ## 安装
 
+### 让 Agent 安装（推荐）
+
+将下面这段话直接发送给能够访问你本机 DSH 的 Agent：
+
+```text
+请先审阅 https://github.com/y2zyyr/dsh-token-usage-sidebar ，然后将这个插件安装到 DeepSeek Harness 的 web profile。请使用 `dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar` 完成安装；如果你可以控制 DSH Web，请重启它；随后确认“设置 → Token 用量”是否出现。只允许改动 DSH 的插件安装，不要修改我的项目或其他配置。完成后告诉我安装的版本和验证结果。
+```
+
+授权 Agent 安装第三方插件前，请先审阅源码；如需可复现的依赖版本，请固定到具体 commit。
+
+### 手动安装
+
 在 DSH 的 `web` profile 中从 GitHub 安装，然后重启 DSH：
 
 ```bash
 dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar
 # 安装后重启 `dsh web`。
 ```
-
-安装第三方插件前请先审阅源码；如需可复现的依赖版本，请固定到具体 commit。
 
 ## 更新
 

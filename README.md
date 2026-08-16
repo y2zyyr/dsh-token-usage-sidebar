@@ -30,14 +30,24 @@ This is a community plugin, not an official DeepSeek plugin.
 
 ## Installation
 
+### Ask your agent (recommended)
+
+Copy this message into an agent that can access your DSH installation:
+
+```text
+Please review https://github.com/y2zyyr/dsh-token-usage-sidebar and install this plugin into DeepSeek Harness's web profile. Use `dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar`, restart DSH Web if you control it, then verify that Settings → Token Usage is visible. Only change the DSH plugin installation; do not modify my projects or other configuration. Report the installed version and verification result.
+```
+
+Review third-party source before authorizing an agent to install it. Pin a commit when your workflow requires a reproducible dependency revision.
+
+### Manual installation
+
 Install from GitHub into the DSH `web` profile, then restart DSH:
 
 ```bash
 dsh plugin --profile web add github:y2zyyr/dsh-token-usage-sidebar
 # Restart `dsh web` after installation.
 ```
-
-Review third-party source before installing. Pin a commit when your workflow requires a reproducible dependency revision.
 
 ## Update
 
