@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.2 — 2026-08-19
+
+### Distribution
+- Widened `@deepseek-ai/dsh-storage-domain` to `^0.1.0-rc.6` so the published
+  package passes the DSH Desktop plugin-market verifier (which targets runtime
+  0.1.0-rc.7) and the 插件市场 shows the direct install button.
+- No behavior or storage changes; accounting semantics unchanged.
+
 ## 1.1.1 — 2026-08-17
 
 ### Distribution
