@@ -19,11 +19,13 @@ This is a community plugin, not an official DeepSeek plugin.
 
 - Sidebar summary: Today, Yesterday, and lifetime Total.
 - Native **Settings → Token Usage** page, placed after Agent Presets and before Plugin Market.
-- Four overview cards: All time, Today, Yesterday, and Last 7 days.
-- Detail range selector: Today, Yesterday, 7D, and All time.
+- Compact per-range metric cards for Total, Input, Output, Cache, Reasoning,
+  and Calls.
+- Detail range selector: Today, Yesterday, 7D, and All time, with the filters
+  kept on one compact row in the DSH modal.
 - Per-range totals for Input, Output, Cache Read, Cache Write, Reasoning, and call count.
 - Dynamic provider/model filters: the choices come from the exact provider and model names present in the selected range; no provider directory or preset supplier list is hard-coded.
-- Optional local provider alias groups: explicitly map several raw provider names to one display group while retaining a raw-name breakdown and leaving the ledger unchanged.
+- Provider/model filters use the exact names reported by DSH; the plugin does not ask users to configure a second provider-name mapping.
 - Compact provider/model table with expandable bucket details, plus a seven-local-day table that retains zero-value days.
 - Persistent local accounting that survives DSH restarts.
 - **Scalable durable ledger (v1.1).** The lifetime accounting store is backed by a
@@ -42,7 +44,7 @@ This is a community plugin, not an official DeepSeek plugin.
 - Replay-safe, deduplicated accounting: an invocation is counted once.
 - Native placement in the DSH web sidebar.
 
-![Token Usage settings page](docs/screenshots/token-usage-settings-en-v1.0.0.jpeg)
+![Token Usage settings page](docs/screenshots/token-usage-settings-en-v1.1.5.png)
 
 ## Installation
 
@@ -134,11 +136,17 @@ All day-based ranges use the DSH host's local calendar days. Last 7 days include
 
 ### Provider and model filtering
 
-Provider options are discovered from the aggregate data in the selected range and are matched exactly. A user whose ledger only contains `my-company-api` sees that name; an empty preset-provider option is never added. Different spellings remain separate until the user explicitly creates a local alias group.
-
-Alias groups are stored in the plugin-owned SQLite database and contain a display label plus a list of raw provider values. They affect only the settings query and presentation. The original provider/model values in `usage_records` are never rewritten. When a group is selected, the aggregate response includes a raw-provider breakdown so the merged total can be audited. A raw provider can belong to only one group at a time to avoid ambiguous double counting.
+Provider options are discovered from the aggregate data in the selected range and are matched exactly. A user whose ledger only contains `my-company-api` sees that name; an empty preset-provider option is never added. Different spellings remain separate, and there is no separate alias form to fill in. Any legacy alias table left by an older release is retained for storage compatibility but is not exposed in the settings UI.
 
 ### Migration and historical coverage
+
+The plugin also performs a narrow automatic discovery pass in the DSH
+`storages` directory. It recognizes plugin-owned token record units, including
+partitioned day ledgers from earlier local builds, and imports their invocation
+details by the canonical `sessionId:turn:step` identity. Aggregate-only
+summaries are used for verification and are never imported as extra calls.
+Discovery is read-only against its sources and idempotent across restarts; it
+does not scan the general filesystem or require a manually configured path.
 
 v1.0.0/v1.0.1 performs one idempotent replay of recoverable persistent DSH session events to enrich existing calls with their exact buckets and model metadata. A previously recorded call is only enriched, or replaced by a higher-sequence final message: it is not added to lifetime usage again.
 
@@ -188,7 +196,7 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
   token bucket totals, provider/model labels, local dates, and accounting metadata.
   It never stores prompts, assistant text, tool output, API keys, credentials, or
   conversation content.
-- **Local identity mappings.** Provider alias groups are stored beside the ledger, remain local to the DSH data home, and only change display/query grouping. They do not replace the raw provider labels in the accounting records.
+- **Legacy alias compatibility.** If an older release created provider-alias rows, they remain in the plugin-owned database during upgrade; the current UI does not ask users to maintain a second provider-name mapping, and accounting records are never deleted or rewritten.
 - **Upgrade backup.** Before cutover the v1.0.1 JSON ledger is copied to a timestamped
   `.pre-v1.1-<timestamp>.bak` file in the same directory. The v1 source is never deleted.
 - **Uninstall.** Removing the plugin does not delete this data.
@@ -198,7 +206,7 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
 
 ## Compatibility and Status
 
-Current release: **v1.1.4** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
+Current release: **v1.1.5** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
 
 Verified with DeepSeek Harness `0.1.0-rc.6` and its `web` profile, on a runtime whose
 Node.js provides the built-in `node:sqlite` module (Node with `node:sqlite`).

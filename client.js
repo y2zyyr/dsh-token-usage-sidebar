@@ -23,7 +23,6 @@ window.__ModuleLoader__.load({
   var EMPTY_FILTERS = { provider: null, model: null };
   var EMPTY_FACETS = { providers: [], models: [], pairs: [], groups: [] };
   var EMPTY_METRICS = { totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, callCount: 0 };
-  var ALIAS_URL = "/token-usage/api/aliases";
   function normalizeDetails(value) {
     return {
       ...value,
@@ -51,29 +50,6 @@ window.__ModuleLoader__.load({
       return void 0;
     }
   }
-  async function aliasRequest(body, signal) {
-    const res = await fetch(ALIAS_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-      cache: "no-store"
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || json.ok !== true || !Array.isArray(json.value?.groups)) {
-      throw new Error(json.error?.message ?? "provider-alias-request-failed");
-    }
-    return json.value.groups;
-  }
-  function fetchProviderAliases(signal) {
-    return aliasRequest({ action: "list" }, signal);
-  }
-  function saveProviderAliasGroup(group, signal) {
-    return aliasRequest({ action: "upsert", group }, signal);
-  }
-  function removeProviderAliasGroup(id, signal) {
-    return aliasRequest({ action: "delete", id }, signal);
-  }
   function fullTokens(n) {
     return Math.round(n).toLocaleString("en-US");
   }
@@ -96,14 +72,9 @@ window.__ModuleLoader__.load({
     }
     return null;
   }
-  function providerOptionLabel(option, t) {
-    return option.type === "group" ? option.label + " \xB7 " + replace(t("includesRawNames"), { count: String(option.rawValues.length) }) : option.label;
-  }
-  function providerScopeLabel(scope, facets, t) {
+  function providerScopeLabel(scope) {
     if (!scope) return "";
-    const option = facets.providers.find((candidate) => candidate.type === scope.type && candidate.value === (scope.type === "raw" ? scope.value : scope.id));
-    if (!option) return scope.type === "raw" ? scope.value : scope.id;
-    return providerOptionLabel(option, t);
+    return scope.type === "raw" ? scope.value : scope.id;
   }
   function Metric({ label, value, hint }) {
     return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-metric", children: [
@@ -122,11 +93,11 @@ window.__ModuleLoader__.load({
     const facets = details.facets ?? EMPTY_FACETS;
     const provider = filters.provider ?? null;
     const selectedProvider = providerScopeKey(provider);
+    const rawProviders = facets.providers.filter((option) => option.type === "raw");
     const modelOptions = (0, import_react.useMemo)(() => {
       const pairs = facets.pairs ?? [];
       if (!provider) return facets.models;
-      const selected = facets.providers.find((option) => option.type === provider.type && option.value === (provider.type === "raw" ? provider.value : provider.id));
-      const rawValues = selected?.rawValues ?? (provider.type === "raw" ? [provider.value] : []);
+      const rawValues = provider.type === "raw" ? [provider.value] : [];
       return [...new Set(pairs.filter((pair) => rawValues.includes(pair.provider)).map((pair) => pair.model))].sort((a, b) => a.localeCompare(b));
     }, [facets, provider]);
     const active = provider !== null || (filters.model ?? null) !== null;
@@ -136,8 +107,7 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("providerFilter") }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", { value: selectedProvider, onChange: (event) => setFilters({ provider: providerScopeOf(event.target.value), model: null }), children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "", children: t("allProviders") }),
-            facets.providers.some((option) => option.type === "group") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", { label: t("providerGroups"), children: facets.providers.filter((option) => option.type === "group").map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: JSON.stringify({ type: "group", id: option.value }), children: providerOptionLabel(option, t) }, "group:" + option.value)) }),
-            facets.providers.some((option) => option.type === "raw") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", { label: t("rawProviders"), children: facets.providers.filter((option) => option.type === "raw").map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: JSON.stringify({ type: "raw", value: option.value }), children: providerOptionLabel(option, t) }, "raw:" + option.value)) })
+            rawProviders.map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: JSON.stringify({ type: "raw", value: option.value }), children: option.label }, "raw:" + option.value))
           ] })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { className: "dtsu-filter-field", children: [
@@ -152,110 +122,9 @@ window.__ModuleLoader__.load({
       active && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { className: "dtsu-filter-scope", children: [
         t("currentScope"),
         ": ",
-        providerScopeLabel(provider, facets, t),
+        providerScopeLabel(provider),
         provider && filters.model ? " \xB7 " : "",
         filters.model ?? ""
-      ] })
-    ] });
-  }
-  function AliasManager({ groups, setGroups, onChanged, t }) {
-    const [open, setOpen] = (0, import_react.useState)(false);
-    const [editorOpen, setEditorOpen] = (0, import_react.useState)(false);
-    const [editingId, setEditingId] = (0, import_react.useState)();
-    const [label, setLabel] = (0, import_react.useState)("");
-    const [rawValues, setRawValues] = (0, import_react.useState)("");
-    const [busy, setBusy] = (0, import_react.useState)(false);
-    const [error, setError] = (0, import_react.useState)();
-    const reset = () => {
-      setEditingId(void 0);
-      setLabel("");
-      setRawValues("");
-      setError(void 0);
-      setEditorOpen(false);
-    };
-    const edit = (group) => {
-      setEditingId(group.id);
-      setLabel(group.label);
-      setRawValues(group.rawValues.join("\n"));
-      setError(void 0);
-      setEditorOpen(true);
-      setOpen(true);
-    };
-    const submit = async () => {
-      const values = Array.from(new Set(rawValues.split(/\r?\n/).map((value) => value.trim()).filter((value) => value.length > 0)));
-      setBusy(true);
-      setError(void 0);
-      try {
-        const next = await saveProviderAliasGroup({ id: editingId, label, rawValues: values });
-        setGroups(next);
-        reset();
-        onChanged();
-      } catch (cause) {
-        setError(String(cause?.message ?? cause));
-      } finally {
-        setBusy(false);
-      }
-    };
-    const remove = async (group) => {
-      if (!window.confirm(t("confirmDeleteAlias").replace("{label}", group.label))) return;
-      setBusy(true);
-      setError(void 0);
-      try {
-        setGroups(await removeProviderAliasGroup(group.id));
-        reset();
-        onChanged(group.id);
-      } catch (cause) {
-        setError(String(cause?.message ?? cause));
-      } finally {
-        setBusy(false);
-      }
-    };
-    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-manager", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-manager-head", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: t("providerAliases") }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: t("filterHelp") })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-secondary-button", onClick: () => {
-          setOpen(!open);
-          if (open) reset();
-        }, children: open ? t("hideAliases") : t("manageAliases") })
-      ] }),
-      open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-panel", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-list", children: [
-          groups.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dtsu-muted", children: t("noAliasGroups") }),
-          groups.map((group) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-row", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: group.label }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: group.rawValues.join(" \xB7 ") })
-            ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-actions", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-secondary-button", disabled: busy, onClick: () => edit(group), children: t("editAlias") }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-danger-button", disabled: busy, onClick: () => void remove(group), children: t("deleteAlias") })
-            ] })
-          ] }, group.id))
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-secondary-button", disabled: busy, onClick: () => {
-          reset();
-          setEditorOpen(true);
-          setOpen(true);
-        }, children: t("addAlias") }),
-        editorOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-editor", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("aliasLabel") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { value: label, onChange: (event) => setLabel(event.target.value), maxLength: 200 })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("aliasValues") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", { value: rawValues, onChange: (event) => setRawValues(event.target.value), rows: 4, placeholder: "provider-a\\nprovider-b\\nprovider-proxy" })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { className: "dtsu-muted", children: t("aliasValuesHint") }),
-          error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dtsu-error", children: error }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-form-actions", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-primary-button", disabled: busy, onClick: () => void submit(), children: t("save") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-secondary-button", disabled: busy, onClick: reset, children: t("cancel") })
-          ] })
-        ] })
       ] })
     ] });
   }
@@ -278,13 +147,10 @@ window.__ModuleLoader__.load({
   var SETTINGS_STYLE_ID = "dsh-token-usage-sidebar/settings.css";
   function TokenUsageSettings({ t }) {
     const [range, setRange] = (0, import_react.useState)("7d");
-    const [summary, setSummary] = (0, import_react.useState)();
     const [details, setDetails] = (0, import_react.useState)();
     const [sevenDay, setSevenDay] = (0, import_react.useState)();
-    const [groups, setGroups] = (0, import_react.useState)([]);
     const [filters, setFilters] = (0, import_react.useState)(EMPTY_FILTERS);
     const [error, setError] = (0, import_react.useState)(false);
-    const [aliasVersion, setAliasVersion] = (0, import_react.useState)(0);
     const [expandedModel, setExpandedModel] = (0, import_react.useState)();
     const [expandedDay, setExpandedDay] = (0, import_react.useState)();
     const timer = (0, import_react.useRef)(void 0);
@@ -294,31 +160,20 @@ window.__ModuleLoader__.load({
       const tag = document.createElement("style");
       tag.id = SETTINGS_STYLE_ID;
       tag.textContent = `.dtsu-filter-bar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:10px;align-items:end;margin:0 0 8px}.dtsu-filter-field{display:flex;flex-direction:column;gap:5px;min-width:0}.dtsu-filter-field>span,.dtsu-alias-editor label>span{font-size:11px;color:var(--dsw-alias-label-secondary,#aaa)}.dtsu-filter-field select,.dtsu-alias-editor input,.dtsu-alias-editor textarea{width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.22));border-radius:7px;background:var(--dsw-alias-fill-l2,rgba(127,127,127,.08));color:var(--dsw-alias-label-primary,#eee);font:inherit;padding:7px 8px}.dtsu-filter-field select{min-width:0}.dtsu-clear-filter,.dtsu-secondary-button,.dtsu-primary-button,.dtsu-danger-button{border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.22));border-radius:7px;background:var(--dsw-alias-fill-l2,rgba(127,127,127,.08));color:var(--dsw-alias-label-primary,#eee);font:inherit;padding:7px 10px;cursor:pointer;white-space:nowrap}.dtsu-clear-filter:disabled,.dtsu-secondary-button:disabled,.dtsu-primary-button:disabled,.dtsu-danger-button:disabled{opacity:.45;cursor:default}.dtsu-primary-button{background:var(--dsw-alias-fill-l3,rgba(127,127,127,.22))}.dtsu-danger-button{color:#ff9b9b}.dtsu-filter-scope{margin:0 0 12px;color:var(--dsw-alias-label-secondary,#aaa);font-size:12px}.dtsu-alias-manager{margin:0 0 14px;padding:12px;border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.18));border-radius:9px;background:var(--dsw-alias-fill-l2,rgba(127,127,127,.04))}.dtsu-alias-manager-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.dtsu-alias-manager-head h3{margin:0}.dtsu-alias-manager-head p{margin:4px 0 0;color:var(--dsw-alias-label-secondary,#aaa);font-size:11px}.dtsu-alias-panel{display:flex;flex-direction:column;gap:10px;margin-top:12px}.dtsu-alias-list{display:flex;flex-direction:column;gap:6px}.dtsu-alias-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px;border-radius:7px;background:var(--dsw-alias-fill-l3,rgba(127,127,127,.08))}.dtsu-alias-row>div:first-child{min-width:0}.dtsu-alias-row strong,.dtsu-alias-row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dtsu-alias-row small{margin-top:3px;color:var(--dsw-alias-label-secondary,#aaa);font-size:11px}.dtsu-alias-actions,.dtsu-form-actions{display:flex;gap:6px;flex-wrap:wrap}.dtsu-alias-editor{display:flex;flex-direction:column;gap:8px;padding-top:4px}.dtsu-alias-editor label{display:flex;flex-direction:column;gap:5px}.dtsu-alias-editor textarea{resize:vertical}.dtsu-muted{margin:0;color:var(--dsw-alias-label-secondary,#aaa);font-size:11px}.dtsu-error{margin:0;color:#ff9b9b;font-size:12px}.dtsu-compact-table{min-width:0}.dtsu-compact-table th,.dtsu-compact-table td{padding:8px 9px}.dtsu-compact-table th:nth-child(1){width:24%}.dtsu-compact-table th:nth-child(2){width:31%}.dtsu-compact-table td:nth-child(1),.dtsu-compact-table td:nth-child(2){max-width:0;overflow:hidden;text-overflow:ellipsis}.dtsu-name-button,.dtsu-model-button,.dtsu-expand-button{border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;padding:0;text-align:left}.dtsu-name-button:hover,.dtsu-model-button:hover{text-decoration:underline}.dtsu-expand-button{color:var(--dsw-alias-label-secondary,#aaa);font-size:16px;line-height:1}.dtsu-action-cell{text-align:center!important;width:34px}.dtsu-expanded-row td{padding:0 10px 10px;background:var(--dsw-alias-fill-l2,rgba(127,127,127,.04))}.dtsu-expanded-content{display:flex;flex-direction:column;gap:9px;padding-top:8px}.dtsu-detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 16px}.dtsu-detail-line{display:flex;justify-content:space-between;gap:8px;color:var(--dsw-alias-label-secondary,#aaa);font-size:11px}.dtsu-detail-line strong{color:var(--dsw-alias-label-primary,#eee);font-weight:500;font-variant-numeric:tabular-nums}.dtsu-raw-breakdown{display:flex;flex-direction:column;gap:5px;padding-top:7px;border-top:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.14))}.dtsu-raw-breakdown>strong{font-size:11px;color:var(--dsw-alias-label-secondary,#aaa)}.dtsu-daily-compact{min-width:0}.dtsu-daily-compact th:first-child{width:35%}.dtsu-daily-compact .dtsu-expanded-row td{padding-top:8px}.dtsu-daily-compact .dtsu-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}@media(max-width:760px){.dtsu-filter-bar{grid-template-columns:1fr}.dtsu-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dtsu-alias-manager-head,.dtsu-alias-row{align-items:flex-start;flex-direction:column}.dtsu-alias-actions{width:100%}}`;
+      tag.textContent += `.dtsu-filter-bar{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:6px}.dtsu-filter-field{gap:3px}.dtsu-filter-field select,.dtsu-clear-filter{height:30px;box-sizing:border-box}.dtsu-filter-field select{padding:6px 7px}.dtsu-clear-filter{align-self:end;margin:0;padding:6px 8px}.dtsu-metrics-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:10px;margin-bottom:14px}.dtsu-metric{min-height:0;padding:8px 9px;gap:3px;border-radius:8px}.dtsu-metric span,.dtsu-metric small{font-size:11px}.dtsu-metric strong{font-size:16px;line-height:1.2}.dtsu-about{margin-top:24px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.16));color:var(--dsw-alias-label-secondary,#aaa)}.dtsu-about-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:5px}.dtsu-about-head h3{color:var(--dsw-alias-label-primary,#eee);font-size:13px}.dtsu-about-version,.dtsu-about p,.dtsu-about a{font-size:11px}.dtsu-about-version{color:var(--dsw-alias-label-tertiary,#888);font-variant-numeric:tabular-nums}.dtsu-about p{margin:3px 0;line-height:1.45}.dtsu-about a{color:var(--dsw-alias-label-secondary,#bbb);text-decoration:none}.dtsu-about a:hover{text-decoration:underline}@media(max-width:430px){.dtsu-metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:360px){.dtsu-filter-bar{grid-template-columns:1fr}.dtsu-clear-filter{width:100%}}`;
       document.head.appendChild(tag);
       return () => tag.remove();
-    }, []);
-    (0, import_react.useEffect)(() => {
-      let alive = true;
-      void fetchProviderAliases().then((next) => {
-        if (alive) setGroups(next);
-      }).catch(() => {
-      });
-      return () => {
-        alive = false;
-      };
     }, []);
     const refresh = (0, import_react.useCallback)(async (selected, selectedFilters) => {
       request.current?.abort();
       const controller = new AbortController();
       request.current = controller;
       const work = [
-        fetchSummary(controller.signal),
         fetchDetails(selected, selectedFilters, controller.signal),
         selected === "7d" ? void 0 : fetchDetails("7d", selectedFilters, controller.signal)
       ];
-      const [nextSummary, nextDetails, nextSeven] = await Promise.all([work[0], work[1], work[2] ?? Promise.resolve(void 0)]);
+      const [nextDetails, nextSeven] = await Promise.all([work[0], work[1] ?? Promise.resolve(void 0)]);
       if (controller.signal.aborted) return;
-      if (nextSummary) setSummary(nextSummary);
       if (nextDetails) setDetails(nextDetails);
       if (nextSeven) setSevenDay(nextSeven);
       else if (selected === "7d" && nextDetails) setSevenDay(nextDetails);
@@ -333,8 +188,7 @@ window.__ModuleLoader__.load({
         if (timer.current) clearInterval(timer.current);
         request.current?.abort();
       };
-    }, [range, filters, aliasVersion, refresh]);
-    const overviewSeven = sevenDay?.totalTokens ?? 0;
+    }, [range, filters, refresh]);
     const c = details?.categories ?? EMPTY_METRICS;
     const rangeLabel = range === "7d" && details?.rangeStartDate && details.rangeEndDate ? details.rangeStartDate + " \u2013 " + details.rangeEndDate : void 0;
     const activeFilter = filters.provider !== null || filters.model !== null;
@@ -347,17 +201,8 @@ window.__ModuleLoader__.load({
     const modelKey = (model) => providerScopeKey(model.providerScope) + "\0" + model.provider + "\0" + model.model;
     return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dtsu-settings", "data-dsh-token-usage-settings": "1", children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-settings-head", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("title") }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: t("subtitle") })
-        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("title") }) }),
         rangeLabel && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dtsu-range-date", children: rangeLabel })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-overview", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("allTime"), value: summary?.lifetimeTotal ?? 0 }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("today"), value: summary?.todayTotal ?? 0 }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("yesterday"), value: summary?.yesterdayTotal ?? 0 }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("last7Days"), value: overviewSeven })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-section-head", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: t("details") }),
@@ -366,12 +211,6 @@ window.__ModuleLoader__.load({
       !details && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dtsu-loading", children: error ? t("unavailable") : t("loading") }),
       details && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScopeFilters, { details, filters, setFilters: setFilterState, t }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AliasManager, { groups, setGroups, onChanged: (deletedId) => {
-          if (deletedId !== void 0 && filters.provider?.type === "group" && filters.provider.id === deletedId) {
-            setFilterState({ provider: null, model: filters.model ?? null });
-          }
-          setAliasVersion((value) => value + 1);
-        }, t }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-metrics-grid", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("total"), value: details.totalTokens }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("input"), value: c.inputTokens }),
@@ -434,7 +273,20 @@ window.__ModuleLoader__.load({
               ] }) }) })
             ] }, day.date);
           }) })
-        ] }) })
+        ] }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-about", "aria-label": t("aboutPlugin"), children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-about-head", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: t("aboutPlugin") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dtsu-about-version", children: [
+              t("version"),
+              " v",
+              PLUGIN_VERSION
+            ] })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: t("aboutDescription") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: t("aboutChanges") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", { href: PLUGIN_REPOSITORY_URL, target: "_blank", rel: "noreferrer", children: t("viewOnGithub") })
+        ] })
       ] })
     ] });
   }
@@ -442,16 +294,15 @@ window.__ModuleLoader__.load({
   // src/client/index.tsx
   var import_jsx_runtime2 = __require("react/jsx-runtime");
   var inject = ["slots", "locale", "connection"];
+  var PLUGIN_VERSION = "1.1.5";
+  var PLUGIN_REPOSITORY_URL = "https://github.com/y2zyyr/dsh-token-usage-sidebar";
   var SETTINGS_NS = "dsh-token-usage-sidebar";
   var settingsLocale = {
     en: {
       nav: "Token Usage",
       title: "Token Usage",
-      subtitle: "Authoritative usage recorded by DeepSeek Harness.",
-      allTime: "All time",
       today: "Today",
       yesterday: "Yesterday",
-      last7Days: "Last 7 days",
       details: "Usage details",
       "7d": "7D",
       all: "All time",
@@ -480,36 +331,21 @@ window.__ModuleLoader__.load({
       allModels: "All models",
       clearFilters: "Clear filters",
       currentScope: "Current scope",
-      filterHelp: "Filters use the exact names reported by DSH; no provider is hard-coded.",
-      providerGroups: "Configured groups",
-      rawProviders: "Raw provider names",
-      includesRawNames: "includes {count} names",
-      groupContains: "contains {count} raw names",
-      providerAliases: "Provider aliases",
-      manageAliases: "Manage aliases",
-      hideAliases: "Hide aliases",
-      addAlias: "Add provider group",
-      editAlias: "Edit",
-      deleteAlias: "Delete",
-      confirmDeleteAlias: "Delete provider group \u201C{label}\u201D? Usage data will be kept.",
-      aliasLabel: "Display name",
-      aliasValues: "Raw provider names",
-      aliasValuesHint: "Enter one exact provider name per line. Matching is case-sensitive.",
+      filterHelp: "Filters use the exact names reported by DSH; the plugin does not define provider aliases.",
       rawBreakdown: "Raw provider breakdown",
-      save: "Save",
-      cancel: "Cancel",
       expand: "Show details",
       collapse: "Hide details",
-      noAliasGroups: "No local provider groups yet."
+      aboutPlugin: "About this plugin",
+      version: "Version",
+      aboutDescription: "Persistent local token-usage accounting for DeepSeek Harness.",
+      aboutChanges: "v1.1.5: automatic history discovery, exact DSH provider names, and a more compact settings layout.",
+      viewOnGithub: "View project on GitHub"
     },
     zh: {
       nav: "Token \u7528\u91CF",
       title: "Token \u7528\u91CF",
-      subtitle: "\u57FA\u4E8E DeepSeek Harness \u5DF2\u63D0\u4EA4\u6D88\u606F\u7684\u6743\u5A01\u8BA1\u6570\u3002",
-      allTime: "\u5168\u90E8\u65F6\u95F4",
       today: "\u4ECA\u5929",
       yesterday: "\u6628\u5929",
-      last7Days: "\u6700\u8FD1 7 \u5929",
       details: "\u7528\u91CF\u660E\u7EC6",
       "7d": "7 \u5929",
       all: "\u5168\u90E8\u65F6\u95F4",
@@ -538,27 +374,15 @@ window.__ModuleLoader__.load({
       allModels: "\u5168\u90E8\u6A21\u578B",
       clearFilters: "\u6E05\u9664\u7B5B\u9009",
       currentScope: "\u5F53\u524D\u8303\u56F4",
-      filterHelp: "\u7B5B\u9009\u4F7F\u7528 DSH \u5B9E\u9645\u4E0A\u62A5\u7684\u7CBE\u786E\u540D\u79F0\uFF0C\u4E0D\u5185\u7F6E\u4EFB\u4F55\u4F9B\u5E94\u5546\u3002",
-      providerGroups: "\u5DF2\u914D\u7F6E\u5206\u7EC4",
-      rawProviders: "\u539F\u59CB\u4F9B\u5E94\u5546\u540D\u79F0",
-      includesRawNames: "\u5305\u542B {count} \u4E2A\u540D\u79F0",
-      groupContains: "\u5305\u542B {count} \u4E2A\u539F\u59CB\u540D\u79F0",
-      providerAliases: "\u4F9B\u5E94\u5546\u540D\u79F0\u6620\u5C04",
-      manageAliases: "\u7BA1\u7406\u522B\u540D",
-      hideAliases: "\u6536\u8D77\u522B\u540D",
-      addAlias: "\u65B0\u5EFA\u4F9B\u5E94\u5546\u5206\u7EC4",
-      editAlias: "\u4FEE\u6539",
-      deleteAlias: "\u5220\u9664",
-      confirmDeleteAlias: "\u5220\u9664\u4F9B\u5E94\u5546\u5206\u7EC4\u201C{label}\u201D\uFF1F\u7528\u91CF\u6570\u636E\u4E0D\u4F1A\u88AB\u5220\u9664\u3002",
-      aliasLabel: "\u663E\u793A\u540D\u79F0",
-      aliasValues: "\u539F\u59CB\u4F9B\u5E94\u5546\u540D\u79F0",
-      aliasValuesHint: "\u6BCF\u884C\u586B\u5199\u4E00\u4E2A\u7CBE\u786E\u7684\u539F\u59CB\u540D\u79F0\uFF0C\u533A\u5206\u5927\u5C0F\u5199\u3002",
-      rawBreakdown: "\u539F\u59CB\u540D\u79F0\u660E\u7EC6",
-      save: "\u4FDD\u5B58",
-      cancel: "\u53D6\u6D88",
+      filterHelp: "\u7B5B\u9009\u4F7F\u7528 DSH \u5B9E\u9645\u4E0A\u62A5\u7684\u7CBE\u786E\u540D\u79F0\uFF1B\u63D2\u4EF6\u4E0D\u518D\u8981\u6C42\u5355\u72EC\u914D\u7F6E\u4F9B\u5E94\u5546\u522B\u540D\u3002",
+      rawBreakdown: "\u539F\u59CB\u4F9B\u5E94\u5546\u540D\u79F0\u660E\u7EC6",
       expand: "\u5C55\u5F00\u660E\u7EC6",
       collapse: "\u6536\u8D77\u660E\u7EC6",
-      noAliasGroups: "\u5C1A\u672A\u914D\u7F6E\u672C\u5730\u4F9B\u5E94\u5546\u5206\u7EC4\u3002"
+      aboutPlugin: "\u5173\u4E8E\u63D2\u4EF6",
+      version: "\u7248\u672C",
+      aboutDescription: "\u4E3A DeepSeek Harness \u63D0\u4F9B\u672C\u5730\u6301\u4E45\u5316 Token \u7528\u91CF\u7EDF\u8BA1\u3002",
+      aboutChanges: "v1.1.5\uFF1A\u81EA\u52A8\u53D1\u73B0\u5386\u53F2\u8BB0\u5F55\u3001\u76F4\u63A5\u4F7F\u7528 DSH \u4F9B\u5E94\u5546\u540D\u79F0\uFF0C\u5E76\u4F18\u5316\u8BBE\u7F6E\u9875\u5E03\u5C40\u3002",
+      viewOnGithub: "\u5728 GitHub \u67E5\u770B\u9879\u76EE"
     }
   };
   var SUMMARY_URL = "/token-usage/api/summary";

@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.5 — 2026-08-29
+
+### Recovery and compatibility
+- Discovers plugin-owned token record-table units in the DSH `storages`
+  directory, including partitioned day ledgers written by earlier local builds.
+- Imports invocation records by canonical `sessionId:turn:step` identity and
+  keeps the highest sequence for a replay, so an aggregate summary is never
+  counted as a second set of calls.
+- Verifies an available aggregate companion against the discovered detail
+  records and exposes source status in the local debug endpoint. Existing
+  source files remain read-only; discovery is idempotent across restarts.
+
+### Settings UX
+- Removed the manual provider-alias configuration panel from the Token Usage
+  settings page. Provider filters now expose the exact names reported by DSH,
+  without asking users to enter the same provider identity a second time.
+- Existing alias rows remain untouched in the local database for backward
+  compatibility; no token records are deleted or rewritten.
+- Tightened the overview and detail metric cards so the settings page uses the
+  narrow DSH modal more efficiently.
+- Kept the provider filter, model filter, and clear-filters action on one
+  compact row in the DSH modal, with a narrow-screen fallback.
+- Removed the redundant explanatory subtitle and duplicate four-card summary
+  from the Token Usage settings page; the detailed range view is now the
+  primary content.
+
 ## 1.1.4 — 2026-08-29
 
 ### Documentation

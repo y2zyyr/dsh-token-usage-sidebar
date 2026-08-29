@@ -30,6 +30,10 @@ import {
   readV1Root,
   type MigrationResult,
 } from './usage/durable/migration.ts';
+import {
+  discoverTokenSources,
+  type SourceDiscoveryResult,
+} from './usage/durable/sourceDiscovery.ts';
 import { collectSessionUsage, type SessionEventLike } from './usage/collector.ts';
 import { defaultDbPath, ensureDbDir, DB_FILE_NAME } from './usage/durable/wrapper.ts';
 import type { InsightRange } from './usage/insights.ts';
@@ -190,9 +194,11 @@ export function apply(ctx: Context): void {
     }
   })();
 
-  const store = new DurableStore({ path: dbPath });
   ensureDbDir(dbPath);
+  const store = new DurableStore({ path: dbPath });
   const agg = new DurableAggregator(store);
+  let sourceDiscovery: SourceDiscoveryResult | undefined;
+  let sourceDiscoveryApplied = 0;
 
   ctx.effect(async () => {
     let migrated = false;
@@ -224,7 +230,36 @@ export function apply(ctx: Context): void {
         console.log('[dsh-token-usage-sidebar] no v1 JSON ledger present; fresh v1.1 install.');
       }
 
-      // 2) Live drive: start AFTER migration so no live event races the cutover.
+      // 2) Auto-discover additional plugin-owned token ledgers. The verified
+      // root migration above remains the cut-over for the old single JSON
+      // ledger; this pass finds record-table units (including day-partitioned
+      // ledgers) that older releases wrote beside it. Aggregate-only units are
+      // used for consistency checks, never converted into duplicate calls.
+      sourceDiscovery = discoverTokenSources(dirname(dbPath), {
+        // A failed root migration stays fail-closed. Once the root migration is
+        // verified/done, re-reading it is safe and idempotent, and also catches
+        // any records appended by an older release between restarts.
+        includeLegacyRoot: migration?.status === 'done',
+      });
+      if (sourceDiscovery.records.length > 0) {
+        sourceDiscoveryApplied = agg.apply(sourceDiscovery.records);
+      }
+      const discoveryMessage = {
+        status: sourceDiscovery.status,
+        sources: sourceDiscovery.sources.length,
+        records: sourceDiscovery.records.length,
+        applied: sourceDiscoveryApplied,
+        total: sourceDiscovery.aggregateChecks.discoveredTotal,
+      };
+      if (sourceDiscovery.status === 'partial' || sourceDiscovery.status === 'failed') {
+        console.warn('[dsh-token-usage-sidebar] token-source discovery partial/failed:', discoveryMessage);
+        if (sourceDiscovery.errors.length > 0) console.warn('[dsh-token-usage-sidebar] discovery issues:', sourceDiscovery.errors);
+      } else {
+        console.log('[dsh-token-usage-sidebar] token-source discovery:', discoveryMessage);
+      }
+
+      // 3) Live drive: start AFTER migration and discovery so no live event
+      //    races either recovery path.
       //    Events recorded before this handler are captured in session logs and
       //    reconciled idempotently below.
       let sessions: Array<{ id: string; events?: readonly SessionEventLike[] }> = [];
@@ -299,7 +334,24 @@ export function apply(ctx: Context): void {
               if (request.action === 'delete') store.deleteProviderAliasGroup(request.id);
               writeJson(res, 200, { ok: true, value: { groups: store.listProviderAliasGroups() } });
             } else if (method === 'debug') {
-              writeJson(res, 200, { ok: true, value: agg.diagnostics() });
+              writeJson(res, 200, { ok: true, value: {
+                ...agg.diagnostics(),
+                sourceDiscovery: sourceDiscovery ? {
+                  status: sourceDiscovery.status,
+                  sourceCount: sourceDiscovery.sources.length,
+                  importedRecordCount: sourceDiscovery.records.length,
+                  appliedRecordCount: sourceDiscoveryApplied,
+                  errors: sourceDiscovery.errors,
+                  aggregateChecks: sourceDiscovery.aggregateChecks,
+                  sources: sourceDiscovery.sources.map((source) => ({
+                    format: source.format,
+                    sha256: source.sha256,
+                    recordCount: source.recordCount,
+                    totalTokens: source.totalTokens,
+                    imported: source.imported,
+                  })),
+                } : undefined,
+              } });
             } else {
               writeJson(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method ' + method } });
             }

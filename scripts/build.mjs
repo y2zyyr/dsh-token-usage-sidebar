@@ -56,6 +56,7 @@ async function main() {
     platform: 'browser',
     jsx: 'automatic',
     external: clientExternals,
+    define: { __DTSU_PLUGIN_VERSION__: JSON.stringify(packageJson.version) },
     sourcemap: false,
     logLevel: 'silent',
     write: false,
