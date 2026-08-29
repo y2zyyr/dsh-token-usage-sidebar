@@ -1,6 +1,6 @@
 {
   "name": "@y2zyyr/dsh-token-usage-sidebar",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "publishConfig": {
     "access": "public"
   },
@@ -60,13 +60,17 @@
     "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-storage-domain": "0.1.0-rc.6",
     "@types/node": "^22.15.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.6.0"
   },
-  "dependencies": {
+  "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/dsh-storage-domain": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-storage-domain": "0.1.0-rc.6"
+  },
+  "dependencies": {
     "zod": "4.4.3"
   },
   "license": "MIT"

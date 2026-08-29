@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.6 — 2026-08-29
+
+### Packaging compatibility
+- Moved DSH-provided `@deepseek-ai/*` host packages from production
+  `dependencies` to exact `peerDependencies`, while retaining them as
+  development-only packages for local type checking.
+- This prevents an install from unnecessarily bringing a second copy of the
+  DSH host runtime into the plugin dependency tree.
+
 ## 1.1.5 — 2026-08-29
 
 ### Recovery and compatibility
