@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-	id: "dsh-token-usage-sidebar",
+	id: "@y2zyyr/dsh-token-usage-sidebar",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;

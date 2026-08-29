@@ -1,11 +1,15 @@
 // scripts/build.mjs
 import { build } from 'esbuild';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
-const PLUGIN_ID = 'dsh-token-usage-sidebar';
+const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+if (typeof packageJson.name !== 'string' || packageJson.name.length === 0) {
+  throw new Error('[build] package.json must define a non-empty name');
+}
+const PLUGIN_ID = packageJson.name;
 
 const hostExternals = [
   '@deepseek-ai/cordis',
@@ -59,7 +63,7 @@ async function main() {
   const body = result.outputFiles[0].text;
 
   const wrapped = `window.__ModuleLoader__.load({
-	id: "${PLUGIN_ID}",
+	id: ${JSON.stringify(PLUGIN_ID)},
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
