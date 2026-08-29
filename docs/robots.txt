@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://y2zyyr.github.io/dsh-token-usage-sidebar/sitemap.xml

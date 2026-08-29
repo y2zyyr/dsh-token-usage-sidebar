@@ -4,6 +4,8 @@ English | [简体中文](README.zh-CN.md)
 
 A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) web-profile plugin that keeps provider-reported token usage locally. It provides both a persistent sidebar summary and a native **Token Usage** settings page.
 
+**Project website:** [dsh-token-usage-sidebar](https://y2zyyr.github.io/dsh-token-usage-sidebar/)
+
 [![npm version](https://img.shields.io/npm/v/@y2zyyr/dsh-token-usage-sidebar)](https://www.npmjs.com/package/@y2zyyr/dsh-token-usage-sidebar)
 
 ```text

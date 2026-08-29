@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d1117">
+  <meta name="description" content="A persistent, local-first token usage sidebar and settings page for DeepSeek Harness. Discover available history automatically and keep accounting in a durable SQLite ledger.">
+  <meta name="keywords" content="DeepSeek Harness plugin, DSH plugin, token usage, token usage sidebar, local token ledger, SQLite">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="dsh-token-usage-sidebar">
+  <meta property="og:title" content="dsh-token-usage-sidebar · Token usage for DeepSeek Harness">
+  <meta property="og:description" content="Persistent, local-first token usage insights for the DeepSeek Harness web profile.">
+  <meta property="og:url" content="https://y2zyyr.github.io/dsh-token-usage-sidebar/">
+  <meta property="og:image" content="https://y2zyyr.github.io/dsh-token-usage-sidebar/screenshots/token-usage-settings-en-v1.1.5.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="dsh-token-usage-sidebar · Token usage for DeepSeek Harness">
+  <meta name="twitter:description" content="Persistent, local-first token usage insights for the DeepSeek Harness web profile.">
+  <meta name="twitter:image" content="https://y2zyyr.github.io/dsh-token-usage-sidebar/screenshots/token-usage-settings-en-v1.1.5.png">
+  <link rel="canonical" href="https://y2zyyr.github.io/dsh-token-usage-sidebar/">
+  <link rel="alternate" hreflang="en" href="https://y2zyyr.github.io/dsh-token-usage-sidebar/">
+  <link rel="alternate" hreflang="zh-CN" href="https://y2zyyr.github.io/dsh-token-usage-sidebar/zh/">
+  <link rel="alternate" hreflang="x-default" href="https://y2zyyr.github.io/dsh-token-usage-sidebar/">
+  <link rel="stylesheet" href="./styles.css">
+  <title>dsh-token-usage-sidebar · Token usage for DeepSeek Harness</title>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "dsh-token-usage-sidebar",
+    "alternateName": "DSH Token Usage Sidebar",
+    "description": "A persistent, local-first token usage sidebar and settings page for DeepSeek Harness.",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "DeepSeek Harness web profile",
+    "softwareVersion": "1.1.6",
+    "license": "https://opensource.org/license/mit/",
+    "url": "https://y2zyyr.github.io/dsh-token-usage-sidebar/",
+    "codeRepository": "https://github.com/y2zyyr/dsh-token-usage-sidebar",
+    "downloadUrl": "https://www.npmjs.com/package/@y2zyyr/dsh-token-usage-sidebar"
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <nav class="nav shell" aria-label="Primary navigation">
+      <a class="brand" href="./" aria-label="dsh-token-usage-sidebar home">
+        <span class="brand-mark" aria-hidden="true">▥</span>
+        <span>dsh-token-usage-sidebar</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="#install">Install</a>
+        <a href="./zh/" lang="zh-CN">中文</a>
+        <a class="nav-github" href="https://github.com/y2zyyr/dsh-token-usage-sidebar" rel="noopener">GitHub <span aria-hidden="true">↗</span></a>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero shell">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="status-dot"></span> Community plugin for DeepSeek Harness</p>
+        <h1>See your real token usage in DSH.</h1>
+        <p class="hero-lede">A persistent, local-first Token Usage sidebar and settings page for the DeepSeek Harness web profile. Discover available history automatically, keep provider and model names accurate, and make every total easy to inspect.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#install">Install the plugin <span aria-hidden="true">↓</span></a>
+          <a class="button button-secondary" href="https://github.com/y2zyyr/dsh-token-usage-sidebar" rel="noopener">View source <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="hero-meta">
+          <span class="release-pill">v1.1.6</span>
+          <span>MIT licensed</span>
+          <span>Data stays local</span>
+        </div>
+      </div>
+      <figure class="hero-shot screenshot-frame">
+        <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>DeepSeek Harness</span></div>
+        <img src="./screenshots/token-usage-settings-en-v1.1.5.png" alt="DeepSeek Harness Token Usage settings page in English" width="1160" height="766">
+        <figcaption>Compact settings view · English interface</figcaption>
+      </figure>
+    </section>
+
+    <section class="trust-strip shell" aria-label="Project links">
+      <span>Built for the DSH web profile</span>
+      <span class="trust-separator" aria-hidden="true">·</span>
+      <a href="https://www.npmjs.com/package/@y2zyyr/dsh-token-usage-sidebar" rel="noopener">Available on npm <span aria-hidden="true">↗</span></a>
+      <span class="trust-separator" aria-hidden="true">·</span>
+      <a href="https://github.com/y2zyyr/dsh-token-usage-sidebar/releases/tag/v1.1.6" rel="noopener">Read the v1.1.6 release notes <span aria-hidden="true">↗</span></a>
+    </section>
+
+    <section id="features" class="section shell">
+      <div class="section-heading">
+        <p class="eyebrow">Designed for useful history</p>
+        <h2>Usage you can understand, not just a number.</h2>
+        <p>The plugin follows DSH/provider-reported usage records and presents the result in a compact, native-looking interface.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card"><span class="feature-icon">↯</span><h3>Automatic history discovery</h3><p>Finds available plugin-owned token records in DSH storage without asking you to maintain a path or duplicate configuration.</p></article>
+        <article class="feature-card"><span class="feature-icon">▦</span><h3>Compact settings</h3><p>Range tabs, filters, metrics, provider/model rows, and recent local days stay readable in a smaller settings surface.</p></article>
+        <article class="feature-card"><span class="feature-icon">◫</span><h3>Durable local ledger</h3><p>A plugin-owned SQLite ledger with WAL mode keeps persistent accounting fast and survives DSH restarts and upgrades.</p></article>
+        <article class="feature-card"><span class="feature-icon">✓</span><h3>Exactly-once accounting</h3><p>Canonical invocation identities and replay-safe updates prevent retries and duplicate events from inflating totals.</p></article>
+        <article class="feature-card"><span class="feature-icon">⌁</span><h3>Accurate provider names</h3><p>Filters use the exact provider and model names reported by DSH. There is no second provider-name form to fill in.</p></article>
+        <article class="feature-card"><span class="feature-icon">◉</span><h3>Private by default</h3><p>Usage metadata remains on your machine. The ledger does not store prompts, assistant text, tool output, credentials, or API keys.</p></article>
+      </div>
+    </section>
+
+    <section id="how-it-works" class="section section-muted">
+      <div class="shell two-column">
+        <div class="section-heading compact-heading">
+          <p class="eyebrow">How it works</p>
+          <h2>One local path from DSH to insight.</h2>
+          <p>The plugin uses authoritative runtime usage when available, preserves raw labels, and reports the limits of recoverable history honestly.</p>
+        </div>
+        <ol class="steps">
+          <li><span>01</span><div><strong>Collect</strong><p>Read committed DSH/provider usage records from live events and available local history.</p></div></li>
+          <li><span>02</span><div><strong>Deduplicate</strong><p>Use the canonical session, turn, and step identity so replays are counted once.</p></div></li>
+          <li><span>03</span><div><strong>Persist</strong><p>Store accounting metadata in the plugin-owned local SQLite ledger.</p></div></li>
+          <li><span>04</span><div><strong>Present</strong><p>Show totals, buckets, filters, provider/model detail, and recent local calendar days.</p></div></li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="install" class="section shell install-section">
+      <div class="install-card">
+        <div class="section-heading compact-heading">
+          <p class="eyebrow">Get started</p>
+          <h2>Install in the DSH web profile.</h2>
+          <p>Install the scoped npm package through the DSH plugin command, then restart the web profile once so the loader can activate it.</p>
+        </div>
+        <div class="code-block" role="group" aria-label="DSH installation command"><span class="code-label">Terminal</span><code>dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
+# Restart dsh web after installation.</code></div>
+        <div class="install-links"><a class="button button-primary" href="https://www.npmjs.com/package/@y2zyyr/dsh-token-usage-sidebar" rel="noopener">Open npm package <span aria-hidden="true">↗</span></a><a class="text-link" href="https://github.com/y2zyyr/dsh-token-usage-sidebar#readme" rel="noopener">Read installation details <span aria-hidden="true">↗</span></a></div>
+      </div>
+    </section>
+
+    <section class="section faq-section shell">
+      <div class="section-heading"><p class="eyebrow">Good to know</p><h2>Questions people usually ask.</h2></div>
+      <div class="faq-grid">
+        <details open><summary>Does removing the plugin delete my totals?</summary><p>No. The accounting ledger is stored separately under the DSH data home and is not removed by uninstalling the plugin.</p></details>
+        <details><summary>Does the plugin estimate tokens from text?</summary><p>No. It uses provider/runtime-reported usage records. Reasoning is shown as an output subdivision and is not added to the total twice.</p></details>
+        <details><summary>Does discovery scan my whole computer?</summary><p>No. Automatic discovery is intentionally narrow: it looks for recognized plugin-owned records in the relevant DSH storage area.</p></details>
+        <details><summary>Is this an official DeepSeek plugin?</summary><p>No. It is an independent community plugin for DeepSeek Harness.</p></details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell footer-inner">
+      <div><a class="brand" href="./"><span class="brand-mark" aria-hidden="true">▥</span><span>dsh-token-usage-sidebar</span></a><p>Persistent, local-first token usage for DeepSeek Harness.</p></div>
+      <div class="footer-links"><a href="https://github.com/y2zyyr/dsh-token-usage-sidebar" rel="noopener">GitHub</a><a href="https://www.npmjs.com/package/@y2zyyr/dsh-token-usage-sidebar" rel="noopener">npm</a><a href="./zh/" lang="zh-CN">简体中文</a></div>
+      <p class="copyright">v1.1.6 · MIT License · Community project</p>
+    </div>
+  </footer>
+</body>
+</html>

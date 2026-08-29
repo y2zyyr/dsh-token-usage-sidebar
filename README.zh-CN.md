@@ -4,6 +4,8 @@
 
 这是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web Profile 的社区插件，在侧边栏显示由 provider/runtime 上报并持久化保存的 Token 用量，并在原生设置中提供完整的 **Token 用量** 页面。
 
+**项目网站：** [dsh-token-usage-sidebar](https://y2zyyr.github.io/dsh-token-usage-sidebar/zh/)
+
 [![npm version](https://img.shields.io/npm/v/@y2zyyr/dsh-token-usage-sidebar)](https://www.npmjs.com/package/@y2zyyr/dsh-token-usage-sidebar)
 
 ```text
