@@ -20,24 +20,90 @@ window.__ModuleLoader__.load({
   // src/client/settings.tsx
   var import_react = __require("react");
   var import_jsx_runtime = __require("react/jsx-runtime");
-  async function fetchDetails(range, signal) {
+  var EMPTY_FILTERS = { provider: null, model: null };
+  var EMPTY_FACETS = { providers: [], models: [], pairs: [], groups: [] };
+  var EMPTY_METRICS = { totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, callCount: 0 };
+  var ALIAS_URL = "/token-usage/api/aliases";
+  function normalizeDetails(value) {
+    return {
+      ...value,
+      filters: value.filters ?? EMPTY_FILTERS,
+      facets: value.facets ?? EMPTY_FACETS,
+      excludedUnclassified: value.excludedUnclassified ?? { tokens: 0, calls: 0 }
+    };
+  }
+  async function fetchDetails(range, filtersOrSignal, signal) {
+    const isSignal = filtersOrSignal !== void 0 && typeof filtersOrSignal === "object" && "aborted" in filtersOrSignal;
+    const filters = isSignal ? EMPTY_FILTERS : filtersOrSignal ?? EMPTY_FILTERS;
+    const requestSignal = isSignal ? filtersOrSignal : signal;
     try {
       const res = await fetch("/token-usage/api/details", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ range }),
-        signal,
+        body: JSON.stringify({ range, filters: { provider: filters.provider ?? null, model: filters.model ?? null } }),
+        signal: requestSignal,
         cache: "no-store"
       });
       if (!res.ok) return void 0;
       const json = await res.json();
-      return json.ok === true && json.value ? json.value : void 0;
+      return json.ok === true && json.value ? normalizeDetails(json.value) : void 0;
     } catch {
       return void 0;
     }
   }
+  async function aliasRequest(body, signal) {
+    const res = await fetch(ALIAS_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+      cache: "no-store"
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.ok !== true || !Array.isArray(json.value?.groups)) {
+      throw new Error(json.error?.message ?? "provider-alias-request-failed");
+    }
+    return json.value.groups;
+  }
+  function fetchProviderAliases(signal) {
+    return aliasRequest({ action: "list" }, signal);
+  }
+  function saveProviderAliasGroup(group, signal) {
+    return aliasRequest({ action: "upsert", group }, signal);
+  }
+  function removeProviderAliasGroup(id, signal) {
+    return aliasRequest({ action: "delete", id }, signal);
+  }
   function fullTokens(n) {
     return Math.round(n).toLocaleString("en-US");
+  }
+  function calls(n) {
+    return Math.round(n).toLocaleString("en-US");
+  }
+  function replace(template, values) {
+    return Object.entries(values).reduce((text, [key, value]) => text.replaceAll("{" + key + "}", value), template);
+  }
+  function providerScopeKey(scope) {
+    return scope ? JSON.stringify(scope) : "";
+  }
+  function providerScopeOf(value) {
+    if (value.length === 0) return null;
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed.type === "raw" && typeof parsed.value === "string") return { type: "raw", value: parsed.value };
+      if (parsed.type === "group" && typeof parsed.id === "string") return { type: "group", id: parsed.id };
+    } catch {
+    }
+    return null;
+  }
+  function providerOptionLabel(option, t) {
+    return option.type === "group" ? option.label + " \xB7 " + replace(t("includesRawNames"), { count: String(option.rawValues.length) }) : option.label;
+  }
+  function providerScopeLabel(scope, facets, t) {
+    if (!scope) return "";
+    const option = facets.providers.find((candidate) => candidate.type === scope.type && candidate.value === (scope.type === "raw" ? scope.value : scope.id));
+    if (!option) return scope.type === "raw" ? scope.value : scope.id;
+    return providerOptionLabel(option, t);
   }
   function Metric({ label, value, hint }) {
     return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-metric", children: [
@@ -46,20 +112,212 @@ window.__ModuleLoader__.load({
       hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: hint })
     ] });
   }
+  function MetricLine({ label, value }) {
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-detail-line", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: label }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: value })
+    ] });
+  }
+  function ScopeFilters({ details, filters, setFilters, t }) {
+    const facets = details.facets ?? EMPTY_FACETS;
+    const provider = filters.provider ?? null;
+    const selectedProvider = providerScopeKey(provider);
+    const modelOptions = (0, import_react.useMemo)(() => {
+      const pairs = facets.pairs ?? [];
+      if (!provider) return facets.models;
+      const selected = facets.providers.find((option) => option.type === provider.type && option.value === (provider.type === "raw" ? provider.value : provider.id));
+      const rawValues = selected?.rawValues ?? (provider.type === "raw" ? [provider.value] : []);
+      return [...new Set(pairs.filter((pair) => rawValues.includes(pair.provider)).map((pair) => pair.model))].sort((a, b) => a.localeCompare(b));
+    }, [facets, provider]);
+    const active = provider !== null || (filters.model ?? null) !== null;
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-filter-bar", "aria-label": t("filterHelp"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { className: "dtsu-filter-field", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("providerFilter") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", { value: selectedProvider, onChange: (event) => setFilters({ provider: providerScopeOf(event.target.value), model: null }), children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "", children: t("allProviders") }),
+            facets.providers.some((option) => option.type === "group") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", { label: t("providerGroups"), children: facets.providers.filter((option) => option.type === "group").map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: JSON.stringify({ type: "group", id: option.value }), children: providerOptionLabel(option, t) }, "group:" + option.value)) }),
+            facets.providers.some((option) => option.type === "raw") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", { label: t("rawProviders"), children: facets.providers.filter((option) => option.type === "raw").map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: JSON.stringify({ type: "raw", value: option.value }), children: providerOptionLabel(option, t) }, "raw:" + option.value)) })
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { className: "dtsu-filter-field", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("modelFilter") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", { value: filters.model ?? "", onChange: (event) => setFilters({ provider, model: event.target.value || null }), children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "", children: t("allModels") }),
+            modelOptions.map((model) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: model, children: model }, model))
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "dtsu-clear-filter", type: "button", disabled: !active, onClick: () => setFilters(EMPTY_FILTERS), children: t("clearFilters") })
+      ] }),
+      active && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { className: "dtsu-filter-scope", children: [
+        t("currentScope"),
+        ": ",
+        providerScopeLabel(provider, facets, t),
+        provider && filters.model ? " \xB7 " : "",
+        filters.model ?? ""
+      ] })
+    ] });
+  }
+  function AliasManager({ groups, setGroups, onChanged, t }) {
+    const [open, setOpen] = (0, import_react.useState)(false);
+    const [editorOpen, setEditorOpen] = (0, import_react.useState)(false);
+    const [editingId, setEditingId] = (0, import_react.useState)();
+    const [label, setLabel] = (0, import_react.useState)("");
+    const [rawValues, setRawValues] = (0, import_react.useState)("");
+    const [busy, setBusy] = (0, import_react.useState)(false);
+    const [error, setError] = (0, import_react.useState)();
+    const reset = () => {
+      setEditingId(void 0);
+      setLabel("");
+      setRawValues("");
+      setError(void 0);
+      setEditorOpen(false);
+    };
+    const edit = (group) => {
+      setEditingId(group.id);
+      setLabel(group.label);
+      setRawValues(group.rawValues.join("\n"));
+      setError(void 0);
+      setEditorOpen(true);
+      setOpen(true);
+    };
+    const submit = async () => {
+      const values = Array.from(new Set(rawValues.split(/\r?\n/).map((value) => value.trim()).filter((value) => value.length > 0)));
+      setBusy(true);
+      setError(void 0);
+      try {
+        const next = await saveProviderAliasGroup({ id: editingId, label, rawValues: values });
+        setGroups(next);
+        reset();
+        onChanged();
+      } catch (cause) {
+        setError(String(cause?.message ?? cause));
+      } finally {
+        setBusy(false);
+      }
+    };
+    const remove = async (group) => {
+      if (!window.confirm(t("confirmDeleteAlias").replace("{label}", group.label))) return;
+      setBusy(true);
+      setError(void 0);
+      try {
+        setGroups(await removeProviderAliasGroup(group.id));
+        reset();
+        onChanged(group.id);
+      } catch (cause) {
+        setError(String(cause?.message ?? cause));
+      } finally {
+        setBusy(false);
+      }
+    };
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-manager", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-manager-head", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: t("providerAliases") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: t("filterHelp") })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-secondary-button", onClick: () => {
+          setOpen(!open);
+          if (open) reset();
+        }, children: open ? t("hideAliases") : t("manageAliases") })
+      ] }),
+      open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-panel", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-list", children: [
+          groups.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dtsu-muted", children: t("noAliasGroups") }),
+          groups.map((group) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-row", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: group.label }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: group.rawValues.join(" \xB7 ") })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-actions", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-secondary-button", disabled: busy, onClick: () => edit(group), children: t("editAlias") }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-danger-button", disabled: busy, onClick: () => void remove(group), children: t("deleteAlias") })
+            ] })
+          ] }, group.id))
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-secondary-button", disabled: busy, onClick: () => {
+          reset();
+          setEditorOpen(true);
+          setOpen(true);
+        }, children: t("addAlias") }),
+        editorOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-alias-editor", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("aliasLabel") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { value: label, onChange: (event) => setLabel(event.target.value), maxLength: 200 })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("aliasValues") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", { value: rawValues, onChange: (event) => setRawValues(event.target.value), rows: 4, placeholder: "provider-a\\nprovider-b\\nprovider-proxy" })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { className: "dtsu-muted", children: t("aliasValuesHint") }),
+          error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dtsu-error", children: error }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-form-actions", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-primary-button", disabled: busy, onClick: () => void submit(), children: t("save") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-secondary-button", disabled: busy, onClick: reset, children: t("cancel") })
+          ] })
+        ] })
+      ] })
+    ] });
+  }
+  function DetailMetrics({ model, t }) {
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-expanded-content", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-detail-grid", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("input"), value: formatTokens(model.inputTokens) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("output"), value: formatTokens(model.outputTokens) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("cacheRead"), value: formatTokens(model.cacheReadTokens) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("cacheWrite"), value: formatTokens(model.cacheWriteTokens) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("reasoning"), value: formatTokens(model.reasoningTokens) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("calls"), value: calls(model.callCount) })
+      ] }),
+      model.rawProviders && model.rawProviders.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-raw-breakdown", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: t("rawBreakdown") }),
+        model.rawProviders.map((raw) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: raw.provider, value: formatTokens(raw.totalTokens) + " \xB7 " + calls(raw.callCount) }, raw.provider))
+      ] })
+    ] });
+  }
+  var SETTINGS_STYLE_ID = "dsh-token-usage-sidebar/settings.css";
   function TokenUsageSettings({ t }) {
     const [range, setRange] = (0, import_react.useState)("7d");
     const [summary, setSummary] = (0, import_react.useState)();
     const [details, setDetails] = (0, import_react.useState)();
     const [sevenDay, setSevenDay] = (0, import_react.useState)();
+    const [groups, setGroups] = (0, import_react.useState)([]);
+    const [filters, setFilters] = (0, import_react.useState)(EMPTY_FILTERS);
     const [error, setError] = (0, import_react.useState)(false);
-    const timer = (0, import_react.useRef)();
-    const refresh = (0, import_react.useCallback)(async (selected) => {
+    const [aliasVersion, setAliasVersion] = (0, import_react.useState)(0);
+    const [expandedModel, setExpandedModel] = (0, import_react.useState)();
+    const [expandedDay, setExpandedDay] = (0, import_react.useState)();
+    const timer = (0, import_react.useRef)(void 0);
+    const request = (0, import_react.useRef)(void 0);
+    (0, import_react.useEffect)(() => {
+      if (typeof document === "undefined" || document.getElementById(SETTINGS_STYLE_ID)) return;
+      const tag = document.createElement("style");
+      tag.id = SETTINGS_STYLE_ID;
+      tag.textContent = `.dtsu-filter-bar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:10px;align-items:end;margin:0 0 8px}.dtsu-filter-field{display:flex;flex-direction:column;gap:5px;min-width:0}.dtsu-filter-field>span,.dtsu-alias-editor label>span{font-size:11px;color:var(--dsw-alias-label-secondary,#aaa)}.dtsu-filter-field select,.dtsu-alias-editor input,.dtsu-alias-editor textarea{width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.22));border-radius:7px;background:var(--dsw-alias-fill-l2,rgba(127,127,127,.08));color:var(--dsw-alias-label-primary,#eee);font:inherit;padding:7px 8px}.dtsu-filter-field select{min-width:0}.dtsu-clear-filter,.dtsu-secondary-button,.dtsu-primary-button,.dtsu-danger-button{border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.22));border-radius:7px;background:var(--dsw-alias-fill-l2,rgba(127,127,127,.08));color:var(--dsw-alias-label-primary,#eee);font:inherit;padding:7px 10px;cursor:pointer;white-space:nowrap}.dtsu-clear-filter:disabled,.dtsu-secondary-button:disabled,.dtsu-primary-button:disabled,.dtsu-danger-button:disabled{opacity:.45;cursor:default}.dtsu-primary-button{background:var(--dsw-alias-fill-l3,rgba(127,127,127,.22))}.dtsu-danger-button{color:#ff9b9b}.dtsu-filter-scope{margin:0 0 12px;color:var(--dsw-alias-label-secondary,#aaa);font-size:12px}.dtsu-alias-manager{margin:0 0 14px;padding:12px;border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.18));border-radius:9px;background:var(--dsw-alias-fill-l2,rgba(127,127,127,.04))}.dtsu-alias-manager-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.dtsu-alias-manager-head h3{margin:0}.dtsu-alias-manager-head p{margin:4px 0 0;color:var(--dsw-alias-label-secondary,#aaa);font-size:11px}.dtsu-alias-panel{display:flex;flex-direction:column;gap:10px;margin-top:12px}.dtsu-alias-list{display:flex;flex-direction:column;gap:6px}.dtsu-alias-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px;border-radius:7px;background:var(--dsw-alias-fill-l3,rgba(127,127,127,.08))}.dtsu-alias-row>div:first-child{min-width:0}.dtsu-alias-row strong,.dtsu-alias-row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dtsu-alias-row small{margin-top:3px;color:var(--dsw-alias-label-secondary,#aaa);font-size:11px}.dtsu-alias-actions,.dtsu-form-actions{display:flex;gap:6px;flex-wrap:wrap}.dtsu-alias-editor{display:flex;flex-direction:column;gap:8px;padding-top:4px}.dtsu-alias-editor label{display:flex;flex-direction:column;gap:5px}.dtsu-alias-editor textarea{resize:vertical}.dtsu-muted{margin:0;color:var(--dsw-alias-label-secondary,#aaa);font-size:11px}.dtsu-error{margin:0;color:#ff9b9b;font-size:12px}.dtsu-compact-table{min-width:0}.dtsu-compact-table th,.dtsu-compact-table td{padding:8px 9px}.dtsu-compact-table th:nth-child(1){width:24%}.dtsu-compact-table th:nth-child(2){width:31%}.dtsu-compact-table td:nth-child(1),.dtsu-compact-table td:nth-child(2){max-width:0;overflow:hidden;text-overflow:ellipsis}.dtsu-name-button,.dtsu-model-button,.dtsu-expand-button{border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;padding:0;text-align:left}.dtsu-name-button:hover,.dtsu-model-button:hover{text-decoration:underline}.dtsu-expand-button{color:var(--dsw-alias-label-secondary,#aaa);font-size:16px;line-height:1}.dtsu-action-cell{text-align:center!important;width:34px}.dtsu-expanded-row td{padding:0 10px 10px;background:var(--dsw-alias-fill-l2,rgba(127,127,127,.04))}.dtsu-expanded-content{display:flex;flex-direction:column;gap:9px;padding-top:8px}.dtsu-detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 16px}.dtsu-detail-line{display:flex;justify-content:space-between;gap:8px;color:var(--dsw-alias-label-secondary,#aaa);font-size:11px}.dtsu-detail-line strong{color:var(--dsw-alias-label-primary,#eee);font-weight:500;font-variant-numeric:tabular-nums}.dtsu-raw-breakdown{display:flex;flex-direction:column;gap:5px;padding-top:7px;border-top:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.14))}.dtsu-raw-breakdown>strong{font-size:11px;color:var(--dsw-alias-label-secondary,#aaa)}.dtsu-daily-compact{min-width:0}.dtsu-daily-compact th:first-child{width:35%}.dtsu-daily-compact .dtsu-expanded-row td{padding-top:8px}.dtsu-daily-compact .dtsu-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}@media(max-width:760px){.dtsu-filter-bar{grid-template-columns:1fr}.dtsu-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dtsu-alias-manager-head,.dtsu-alias-row{align-items:flex-start;flex-direction:column}.dtsu-alias-actions{width:100%}}`;
+      document.head.appendChild(tag);
+      return () => tag.remove();
+    }, []);
+    (0, import_react.useEffect)(() => {
+      let alive = true;
+      void fetchProviderAliases().then((next) => {
+        if (alive) setGroups(next);
+      }).catch(() => {
+      });
+      return () => {
+        alive = false;
+      };
+    }, []);
+    const refresh = (0, import_react.useCallback)(async (selected, selectedFilters) => {
+      request.current?.abort();
+      const controller = new AbortController();
+      request.current = controller;
       const work = [
-        fetchSummary(),
-        fetchDetails(selected),
-        selected === "7d" ? void 0 : fetchDetails("7d")
+        fetchSummary(controller.signal),
+        fetchDetails(selected, selectedFilters, controller.signal),
+        selected === "7d" ? void 0 : fetchDetails("7d", selectedFilters, controller.signal)
       ];
       const [nextSummary, nextDetails, nextSeven] = await Promise.all([work[0], work[1], work[2] ?? Promise.resolve(void 0)]);
+      if (controller.signal.aborted) return;
       if (nextSummary) setSummary(nextSummary);
       if (nextDetails) setDetails(nextDetails);
       if (nextSeven) setSevenDay(nextSeven);
@@ -67,17 +325,26 @@ window.__ModuleLoader__.load({
       setError(!nextDetails);
     }, []);
     (0, import_react.useEffect)(() => {
-      void refresh(range);
+      void refresh(range, filters);
       timer.current = setInterval(() => {
-        if (!document.hidden) void refresh(range);
+        if (!document.hidden) void refresh(range, filters);
       }, 3e4);
       return () => {
         if (timer.current) clearInterval(timer.current);
+        request.current?.abort();
       };
-    }, [range, refresh]);
+    }, [range, filters, aliasVersion, refresh]);
     const overviewSeven = sevenDay?.totalTokens ?? 0;
-    const c = details?.categories;
+    const c = details?.categories ?? EMPTY_METRICS;
     const rangeLabel = range === "7d" && details?.rangeStartDate && details.rangeEndDate ? details.rangeStartDate + " \u2013 " + details.rangeEndDate : void 0;
+    const activeFilter = filters.provider !== null || filters.model !== null;
+    const currentModels = details?.models ?? [];
+    const unknownNote = details && activeFilter && (details.excludedUnclassified?.tokens ?? 0) > 0 ? replace(t("excludedUnknown"), { tokens: fullTokens(details.excludedUnclassified?.tokens ?? 0), calls: calls(details.excludedUnclassified?.calls ?? 0) }) : details && !activeFilter && details.unknownTokens > 0 ? replace(t("unknown"), { tokens: fullTokens(details.unknownTokens), calls: calls(details.unknownCallCount) }) : void 0;
+    const setFilterState = (next) => {
+      setExpandedModel(void 0);
+      setFilters({ provider: next.provider ?? null, model: next.model ?? null });
+    };
+    const modelKey = (model) => providerScopeKey(model.providerScope) + "\0" + model.provider + "\0" + model.model;
     return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dtsu-settings", "data-dsh-token-usage-settings": "1", children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-settings-head", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
@@ -94,78 +361,79 @@ window.__ModuleLoader__.load({
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-section-head", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: t("details") }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dtsu-range-switch", role: "tablist", "aria-label": t("details"), children: ["today", "yesterday", "7d", "all"].map((key) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-          "button",
-          {
-            type: "button",
-            role: "tab",
-            "aria-selected": range === key,
-            className: range === key ? "is-active" : "",
-            onClick: () => setRange(key),
-            children: t(key)
-          },
-          key
-        )) })
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dtsu-range-switch", role: "tablist", "aria-label": t("details"), children: ["today", "yesterday", "7d", "all"].map((key) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", role: "tab", "aria-selected": range === key, className: range === key ? "is-active" : "", onClick: () => setRange(key), children: t(key) }, key)) })
       ] }),
       !details && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dtsu-loading", children: error ? t("unavailable") : t("loading") }),
       details && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScopeFilters, { details, filters, setFilters: setFilterState, t }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AliasManager, { groups, setGroups, onChanged: (deletedId) => {
+          if (deletedId !== void 0 && filters.provider?.type === "group" && filters.provider.id === deletedId) {
+            setFilterState({ provider: null, model: filters.model ?? null });
+          }
+          setAliasVersion((value) => value + 1);
+        }, t }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-metrics-grid", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("total"), value: details.totalTokens }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("input"), value: c.totalTokens === void 0 ? 0 : c.inputTokens }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("input"), value: c.inputTokens }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("output"), value: c.outputTokens }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("cacheRead"), value: c.cacheReadTokens }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("cacheWrite"), value: c.cacheWriteTokens }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("reasoning"), value: c.reasoningTokens, hint: t("reasoningHint") }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Metric, { label: t("calls"), value: c.callCount })
         ] }),
-        details.unknownTokens > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dtsu-note", children: t("unknown").replace("{tokens}", fullTokens(details.unknownTokens)).replace("{calls}", String(details.unknownCallCount)) }),
+        unknownNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dtsu-note", children: unknownNote }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { className: "dtsu-table-title", children: t("byModel") }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dtsu-table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", { className: "dtsu-table", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dtsu-table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", { className: "dtsu-table dtsu-compact-table", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("provider") }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("model") }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("total") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("input") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("output") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("cacheRead") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("cacheWrite") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("reasoning") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("calls") })
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("calls") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { "aria-label": t("details") })
           ] }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: details.models.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tr", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { colSpan: 9, className: "dtsu-empty-row", children: t("noClassified") }) }) : details.models.map((model) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: model.provider }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: model.model }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(model.totalTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(model.inputTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(model.outputTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(model.cacheReadTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(model.cacheWriteTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(model.reasoningTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: model.callCount })
-          ] }, model.provider + model.model)) })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: currentModels.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tr", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { colSpan: 5, className: "dtsu-empty-row", children: t("noMatching") }) }) : currentModels.map((model) => {
+            const key = modelKey(model);
+            const expanded = expandedModel === key;
+            const scope = model.providerScope ?? { type: "raw", value: model.provider };
+            return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-name-button", title: model.provider, onClick: () => setFilterState({ provider: scope, model: null }), children: model.provider }) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-model-button", title: model.model, onClick: () => setFilterState({ provider: null, model: model.model }), children: model.model }) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(model.totalTokens) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: calls(model.callCount) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { className: "dtsu-action-cell", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-expand-button", "aria-expanded": expanded, "aria-label": expanded ? t("collapse") : t("expand"), onClick: () => setExpandedModel(expanded ? void 0 : key), children: expanded ? "\u2212" : "+" }) })
+              ] }),
+              expanded && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tr", { className: "dtsu-expanded-row", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { colSpan: 5, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DetailMetrics, { model, t }) }) })
+            ] }, key);
+          }) })
         ] }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { className: "dtsu-table-title", children: t("sevenDayDaily") }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dtsu-table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", { className: "dtsu-table dtsu-daily", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dtsu-table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", { className: "dtsu-table dtsu-compact-table dtsu-daily-compact", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("date") }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("total") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("input") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("output") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("cacheRead") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("cacheWrite") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("reasoning") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("calls") })
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("calls") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { "aria-label": t("details") })
           ] }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: (sevenDay?.daily ?? []).map((day) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: day.date }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(day.totalTokens + day.unknownTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(day.inputTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(day.outputTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(day.cacheReadTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(day.cacheWriteTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(day.reasoningTokens) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: day.callCount })
-          ] }, day.date)) })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: (sevenDay?.daily ?? []).map((day) => {
+            const expanded = expandedDay === day.date;
+            return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: day.date }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: formatTokens(day.totalTokens + day.unknownTokens) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: calls(day.callCount) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { className: "dtsu-action-cell", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dtsu-expand-button", "aria-expanded": expanded, "aria-label": expanded ? t("collapse") : t("expand"), onClick: () => setExpandedDay(expanded ? void 0 : day.date), children: expanded ? "\u2212" : "+" }) })
+              ] }),
+              expanded && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tr", { className: "dtsu-expanded-row", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { colSpan: 4, children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-detail-grid", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("input"), value: formatTokens(day.inputTokens) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("output"), value: formatTokens(day.outputTokens) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("cacheRead"), value: formatTokens(day.cacheReadTokens) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("cacheWrite"), value: formatTokens(day.cacheWriteTokens) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("reasoning"), value: formatTokens(day.reasoningTokens) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MetricLine, { label: t("calls"), value: calls(day.callCount) })
+              ] }) }) })
+            ] }, day.date);
+          }) })
         ] }) })
       ] })
     ] });
@@ -203,7 +471,36 @@ window.__ModuleLoader__.load({
       loading: "Loading token usage\u2026",
       unavailable: "Usage data is temporarily unavailable.",
       noClassified: "No classified usage in this range.",
-      unknown: "{tokens} tokens across {calls} calls cannot be classified from older records. They remain included in Total."
+      noMatching: "No matching usage in this range.",
+      unknown: "{tokens} tokens across {calls} calls cannot be classified from older records. They remain included in Total.",
+      excludedUnknown: "{tokens} tokens across {calls} calls are unclassified and excluded from this filter.",
+      providerFilter: "Provider",
+      modelFilter: "Model",
+      allProviders: "All providers",
+      allModels: "All models",
+      clearFilters: "Clear filters",
+      currentScope: "Current scope",
+      filterHelp: "Filters use the exact names reported by DSH; no provider is hard-coded.",
+      providerGroups: "Configured groups",
+      rawProviders: "Raw provider names",
+      includesRawNames: "includes {count} names",
+      groupContains: "contains {count} raw names",
+      providerAliases: "Provider aliases",
+      manageAliases: "Manage aliases",
+      hideAliases: "Hide aliases",
+      addAlias: "Add provider group",
+      editAlias: "Edit",
+      deleteAlias: "Delete",
+      confirmDeleteAlias: "Delete provider group \u201C{label}\u201D? Usage data will be kept.",
+      aliasLabel: "Display name",
+      aliasValues: "Raw provider names",
+      aliasValuesHint: "Enter one exact provider name per line. Matching is case-sensitive.",
+      rawBreakdown: "Raw provider breakdown",
+      save: "Save",
+      cancel: "Cancel",
+      expand: "Show details",
+      collapse: "Hide details",
+      noAliasGroups: "No local provider groups yet."
     },
     zh: {
       nav: "Token \u7528\u91CF",
@@ -232,7 +529,36 @@ window.__ModuleLoader__.load({
       loading: "\u6B63\u5728\u52A0\u8F7D Token \u7528\u91CF\u2026",
       unavailable: "Token \u7528\u91CF\u6682\u65F6\u4E0D\u53EF\u7528\u3002",
       noClassified: "\u8FD9\u4E2A\u8303\u56F4\u5185\u6CA1\u6709\u53EF\u5206\u7C7B\u7684\u7528\u91CF\u3002",
-      unknown: "\u6709 {tokens} tokens\u3001{calls} \u6B21\u8C03\u7528\u65E0\u6CD5\u4ECE\u65E7\u8BB0\u5F55\u4E2D\u5206\u7C7B\uFF1B\u5B83\u4EEC\u4ECD\u8BA1\u5165\u603B\u8BA1\u3002"
+      noMatching: "\u5F53\u524D\u8303\u56F4\u5185\u6CA1\u6709\u5339\u914D\u7528\u91CF\u3002",
+      unknown: "\u6709 {tokens} tokens\u3001{calls} \u6B21\u8C03\u7528\u65E0\u6CD5\u4ECE\u65E7\u8BB0\u5F55\u4E2D\u5206\u7C7B\uFF1B\u5B83\u4EEC\u4ECD\u8BA1\u5165\u603B\u8BA1\u3002",
+      excludedUnknown: "\u6709 {tokens} tokens\u3001{calls} \u6B21\u8C03\u7528\u672A\u5206\u7C7B\uFF0C\u56E0\u6B64\u672A\u8BA1\u5165\u5F53\u524D\u7B5B\u9009\u3002",
+      providerFilter: "\u4F9B\u5E94\u5546",
+      modelFilter: "\u6A21\u578B",
+      allProviders: "\u5168\u90E8\u4F9B\u5E94\u5546",
+      allModels: "\u5168\u90E8\u6A21\u578B",
+      clearFilters: "\u6E05\u9664\u7B5B\u9009",
+      currentScope: "\u5F53\u524D\u8303\u56F4",
+      filterHelp: "\u7B5B\u9009\u4F7F\u7528 DSH \u5B9E\u9645\u4E0A\u62A5\u7684\u7CBE\u786E\u540D\u79F0\uFF0C\u4E0D\u5185\u7F6E\u4EFB\u4F55\u4F9B\u5E94\u5546\u3002",
+      providerGroups: "\u5DF2\u914D\u7F6E\u5206\u7EC4",
+      rawProviders: "\u539F\u59CB\u4F9B\u5E94\u5546\u540D\u79F0",
+      includesRawNames: "\u5305\u542B {count} \u4E2A\u540D\u79F0",
+      groupContains: "\u5305\u542B {count} \u4E2A\u539F\u59CB\u540D\u79F0",
+      providerAliases: "\u4F9B\u5E94\u5546\u540D\u79F0\u6620\u5C04",
+      manageAliases: "\u7BA1\u7406\u522B\u540D",
+      hideAliases: "\u6536\u8D77\u522B\u540D",
+      addAlias: "\u65B0\u5EFA\u4F9B\u5E94\u5546\u5206\u7EC4",
+      editAlias: "\u4FEE\u6539",
+      deleteAlias: "\u5220\u9664",
+      confirmDeleteAlias: "\u5220\u9664\u4F9B\u5E94\u5546\u5206\u7EC4\u201C{label}\u201D\uFF1F\u7528\u91CF\u6570\u636E\u4E0D\u4F1A\u88AB\u5220\u9664\u3002",
+      aliasLabel: "\u663E\u793A\u540D\u79F0",
+      aliasValues: "\u539F\u59CB\u4F9B\u5E94\u5546\u540D\u79F0",
+      aliasValuesHint: "\u6BCF\u884C\u586B\u5199\u4E00\u4E2A\u7CBE\u786E\u7684\u539F\u59CB\u540D\u79F0\uFF0C\u533A\u5206\u5927\u5C0F\u5199\u3002",
+      rawBreakdown: "\u539F\u59CB\u540D\u79F0\u660E\u7EC6",
+      save: "\u4FDD\u5B58",
+      cancel: "\u53D6\u6D88",
+      expand: "\u5C55\u5F00\u660E\u7EC6",
+      collapse: "\u6536\u8D77\u660E\u7EC6",
+      noAliasGroups: "\u5C1A\u672A\u914D\u7F6E\u672C\u5730\u4F9B\u5E94\u5546\u5206\u7EC4\u3002"
     }
   };
   var SUMMARY_URL = "/token-usage/api/summary";

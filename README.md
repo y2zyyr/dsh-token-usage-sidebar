@@ -22,7 +22,9 @@ This is a community plugin, not an official DeepSeek plugin.
 - Four overview cards: All time, Today, Yesterday, and Last 7 days.
 - Detail range selector: Today, Yesterday, 7D, and All time.
 - Per-range totals for Input, Output, Cache Read, Cache Write, Reasoning, and call count.
-- Provider/model table, sorted by Total, plus a seven-local-day table that retains zero-value days.
+- Dynamic provider/model filters: the choices come from the exact provider and model names present in the selected range; no provider directory or preset supplier list is hard-coded.
+- Optional local provider alias groups: explicitly map several raw provider names to one display group while retaining a raw-name breakdown and leaving the ledger unchanged.
+- Compact provider/model table with expandable bucket details, plus a seven-local-day table that retains zero-value days.
 - Persistent local accounting that survives DSH restarts.
 - **Scalable durable ledger (v1.1).** The lifetime accounting store is backed by a
   plugin-owned SQLite database (Node's built-in `node:sqlite`, WAL journal) instead
@@ -130,6 +132,12 @@ The plugin uses provider/runtime-reported usage records rather than tokenizer es
 
 All day-based ranges use the DSH host's local calendar days. Last 7 days includes today plus the previous six local days. The settings page receives aggregate results only; it never receives the individual invocation ledger.
 
+### Provider and model filtering
+
+Provider options are discovered from the aggregate data in the selected range and are matched exactly. A user whose ledger only contains `my-company-api` sees that name; an empty preset-provider option is never added. Different spellings remain separate until the user explicitly creates a local alias group.
+
+Alias groups are stored in the plugin-owned SQLite database and contain a display label plus a list of raw provider values. They affect only the settings query and presentation. The original provider/model values in `usage_records` are never rewritten. When a group is selected, the aggregate response includes a raw-provider breakdown so the merged total can be audited. A raw provider can belong to only one group at a time to avoid ambiguous double counting.
+
 ### Migration and historical coverage
 
 v1.0.0/v1.0.1 performs one idempotent replay of recoverable persistent DSH session events to enrich existing calls with their exact buckets and model metadata. A previously recorded call is only enriched, or replaced by a higher-sequence final message: it is not added to lifetime usage again.
@@ -180,6 +188,7 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
   token bucket totals, provider/model labels, local dates, and accounting metadata.
   It never stores prompts, assistant text, tool output, API keys, credentials, or
   conversation content.
+- **Local identity mappings.** Provider alias groups are stored beside the ledger, remain local to the DSH data home, and only change display/query grouping. They do not replace the raw provider labels in the accounting records.
 - **Upgrade backup.** Before cutover the v1.0.1 JSON ledger is copied to a timestamped
   `.pre-v1.1-<timestamp>.bak` file in the same directory. The v1 source is never deleted.
 - **Uninstall.** Removing the plugin does not delete this data.

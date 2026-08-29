@@ -1,6 +1,6 @@
 // src/usage/durable/schema.ts — SQLite schema (v1.1 scalable durable ledger)
 // usage_records = authoritative source of truth; aggregate_* = derived cache.
-export const STORAGE_SCHEMA_VERSION = 1;
+export const STORAGE_SCHEMA_VERSION = 2;
 export const SCHEMA_SQL: readonly string[] = [
   'CREATE TABLE IF NOT EXISTS usage_records (' +
   'canonical_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn INTEGER NOT NULL, ' +
@@ -32,4 +32,7 @@ export const SCHEMA_SQL: readonly string[] = [
   'historical_recovered_record_count INTEGER NOT NULL DEFAULT 0, recovery_json TEXT)',
   'CREATE INDEX IF NOT EXISTS idx_usage_records_date ON usage_records(local_date)',
   'CREATE INDEX IF NOT EXISTS idx_usage_records_provider_model ON usage_records(provider, model)',
+  'CREATE TABLE IF NOT EXISTS provider_alias_groups (' +
+  'id TEXT PRIMARY KEY, label TEXT NOT NULL, raw_values_json TEXT NOT NULL, ' +
+  'created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)',
 ];

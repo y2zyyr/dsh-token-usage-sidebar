@@ -17,7 +17,6 @@
 //   Client channel       : POST /token-usage/api/summary (browser-trust fence).
 //
 import type { Context } from '@deepseek-ai/cordis';
-import { z } from 'zod';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
@@ -34,6 +33,8 @@ import {
 import { collectSessionUsage, type SessionEventLike } from './usage/collector.ts';
 import { defaultDbPath, ensureDbDir, DB_FILE_NAME } from './usage/durable/wrapper.ts';
 import type { InsightRange } from './usage/insights.ts';
+import type { ProviderAliasGroupInput } from './usage/durable/durableStore.ts';
+import type { UsageFilters } from './usage/providerAliases.ts';
 
 export const name = 'dsh-token-usage-sidebar';
 
@@ -101,6 +102,67 @@ async function readJsonBody(req: any): Promise<unknown> {
 function insightRangeOf(body: unknown): InsightRange | undefined {
   const range = body && typeof body === 'object' ? (body as { range?: unknown }).range : undefined;
   return range === 'today' || range === 'yesterday' || range === '7d' || range === 'all' ? range : undefined;
+}
+
+type ParsedFilters = { ok: true; value: UsageFilters } | { ok: false; message: string };
+
+function usageFiltersOf(body: unknown): ParsedFilters {
+  if (body === null || typeof body !== 'object') return { ok: true, value: {} };
+  const raw = (body as { filters?: unknown }).filters;
+  if (raw === undefined || raw === null) return { ok: true, value: {} };
+  if (typeof raw !== 'object') return { ok: false, message: 'filters must be an object' };
+  const record = raw as Record<string, unknown>;
+  let provider: UsageFilters['provider'] = null;
+  if (record.provider !== undefined && record.provider !== null) {
+    if (typeof record.provider !== 'object') return { ok: false, message: 'filters.provider must be an object or null' };
+    const scope = record.provider as Record<string, unknown>;
+    if (scope.type === 'raw' && typeof scope.value === 'string' && scope.value.length > 0) {
+      provider = { type: 'raw', value: scope.value };
+    } else if (scope.type === 'group' && typeof scope.id === 'string' && scope.id.length > 0) {
+      provider = { type: 'group', id: scope.id };
+    } else {
+      return { ok: false, message: 'filters.provider must be a raw or group scope' };
+    }
+  }
+  let model: string | null = null;
+  if (record.model !== undefined && record.model !== null) {
+    if (typeof record.model !== 'string') return { ok: false, message: 'filters.model must be a string or null' };
+    model = record.model.length > 0 ? record.model : null;
+  }
+  return { ok: true, value: { provider, model } };
+}
+
+type AliasRequest =
+  | { ok: true; action: 'list' }
+  | { ok: true; action: 'upsert'; group: ProviderAliasGroupInput }
+  | { ok: true; action: 'delete'; id: string }
+  | { ok: false; message: string };
+
+function aliasRequestOf(body: unknown): AliasRequest {
+  if (body === null || typeof body !== 'object') return { ok: true, action: 'list' };
+  const record = body as Record<string, unknown>;
+  const action = record.action;
+  if (action === undefined || action === 'list') return { ok: true, action: 'list' };
+  if (action === 'delete') {
+    return typeof record.id === 'string' && record.id.length > 0
+      ? { ok: true, action: 'delete', id: record.id }
+      : { ok: false, message: 'alias id is required' };
+  }
+  if (action !== 'upsert') return { ok: false, message: 'alias action must be list, upsert, or delete' };
+  if (record.group === null || typeof record.group !== 'object') return { ok: false, message: 'alias group is required' };
+  const group = record.group as Record<string, unknown>;
+  const id = group.id === undefined ? undefined : group.id;
+  if (id !== undefined && typeof id !== 'string') return { ok: false, message: 'alias group id must be a string' };
+  if (typeof group.label !== 'string') return { ok: false, message: 'alias group label is required' };
+  if (!Array.isArray(group.rawValues) || !group.rawValues.every((value) => typeof value === 'string')) {
+    return { ok: false, message: 'alias group rawValues must be an array of strings' };
+  }
+  return { ok: true, action: 'upsert', group: { id, label: group.label, rawValues: group.rawValues as string[] } };
+}
+
+function isClientValidationError(error: unknown): boolean {
+  const message = String((error as Error)?.message ?? error);
+  return message.startsWith('provider-alias-') || message.startsWith('alias ') || message.startsWith('filters.');
 }
 
 /** Migration source is the v1 (or no) JSON ledger that shared the storages dir. */
@@ -221,14 +283,28 @@ export function apply(ctx: Context): void {
                 writeJson(res, 400, { ok: false, error: { code: 'validation-error', message: 'range must be today, yesterday, 7d, or all' } });
                 return;
               }
-              writeJson(res, 200, { ok: true, value: agg.insights(range) });
+              const filters = usageFiltersOf(body);
+              if (!filters.ok) {
+                writeJson(res, 400, { ok: false, error: { code: 'validation-error', message: filters.message } });
+                return;
+              }
+              writeJson(res, 200, { ok: true, value: agg.insights(range, filters.value) });
+            } else if (method === 'aliases') {
+              const request = aliasRequestOf(body);
+              if (!request.ok) {
+                writeJson(res, 400, { ok: false, error: { code: 'validation-error', message: request.message } });
+                return;
+              }
+              if (request.action === 'upsert') store.upsertProviderAliasGroup(request.group);
+              if (request.action === 'delete') store.deleteProviderAliasGroup(request.id);
+              writeJson(res, 200, { ok: true, value: { groups: store.listProviderAliasGroups() } });
             } else if (method === 'debug') {
               writeJson(res, 200, { ok: true, value: agg.diagnostics() });
             } else {
               writeJson(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method ' + method } });
             }
           } catch (e) {
-            writeJson(res, 500, { ok: false, error: { code: 'internal', message: String((e as Error)?.message ?? e) } });
+            writeJson(res, isClientValidationError(e) ? 400 : 500, { ok: false, error: { code: isClientValidationError(e) ? 'validation-error' : 'internal', message: String((e as Error)?.message ?? e) } });
           }
         },
       });

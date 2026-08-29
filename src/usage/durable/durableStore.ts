@@ -5,7 +5,9 @@
 // ADD new record contribution, all in ONE transaction (records + deltas atomic).
 
 import { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
 import type { UsageRecord } from '../types.ts';
+import type { ProviderAliasGroup } from '../providerAliases.ts';
 import { inTransaction, openDatabase } from './wrapper.ts';
 import { STORAGE_SCHEMA_VERSION } from './schema.ts';
 
@@ -42,6 +44,12 @@ export interface BatchOutcome { added: number; replaced: number; ignored: number
 const BLANK_GLOBAL: GlobalAggRow = { total_tokens: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, unknown_tokens: 0, unknown_calls: 0, updated_at: 0 };
 export interface DurableStoreOptions { path: string; now?: () => number; }
 
+export interface ProviderAliasGroupInput {
+  id?: string;
+  label: string;
+  rawValues: readonly string[];
+}
+
 interface Contribution {
   total: number; input: number; output: number; cacheRead: number; cacheWrite: number;
   reasoning: number; isCall: number; isUnknown: number; localDate: string; provider?: string; model?: string;
@@ -71,7 +79,14 @@ export class DurableStore {
 
   private ensureMeta(): void {
     const row = this.db.prepare('SELECT COUNT(*) AS c FROM meta').get() as { c: number };
-    if (Number(row.c) > 0) return;
+    if (Number(row.c) > 0) {
+      // Adding the local alias table is an additive schema change. Existing
+      // ledgers keep all records and aggregates; only the metadata version is
+      // advanced so diagnostics can identify the new schema.
+      this.db.prepare('UPDATE meta SET storage_schema_version=? WHERE id=1 AND storage_schema_version<?')
+        .run(STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION);
+      return;
+    }
     this.db.prepare(`INSERT INTO meta (id, storage_schema_version, migration_version, record_generation, aggregate_generation, migration_status, last_aggregate_rebuild, earliest_record_at, latest_record_at, live_recorded_total, historical_recovered_total, historical_recovered_record_count, recovery_json)
       VALUES (1,?,?,0,0,'not_started',NULL,NULL,NULL,0,0,0,NULL)`).run(STORAGE_SCHEMA_VERSION, 0);
   }
@@ -123,6 +138,55 @@ export class DurableStore {
   dayModelTotals(date?: string): DayModelAggRow[] {
     if (date !== undefined) return this.db.prepare('SELECT * FROM aggregate_day_model WHERE local_date=?').all(date) as unknown as DayModelAggRow[];
     return this.db.prepare('SELECT * FROM aggregate_day_model').all() as unknown as DayModelAggRow[];
+  }
+
+  listProviderAliasGroups(): ProviderAliasGroup[] {
+    const rows = this.db.prepare('SELECT id, label, raw_values_json FROM provider_alias_groups ORDER BY label COLLATE NOCASE, id').all() as Array<Record<string, unknown>>;
+    const groups: ProviderAliasGroup[] = [];
+    for (const row of rows) {
+      try {
+        const values = JSON.parse(String(row.raw_values_json));
+        if (!Array.isArray(values)) continue;
+        const rawValues = [...new Set(values.filter((v): v is string => typeof v === 'string' && v.length > 0))];
+        const id = String(row.id);
+        const label = String(row.label);
+        if (id.length === 0 || label.length === 0 || rawValues.length === 0) continue;
+        groups.push({ id, label, rawValues });
+      } catch {
+        // A malformed optional alias row must not prevent the usage ledger
+        // from opening. It is ignored until the user replaces/removes it.
+      }
+    }
+    return groups;
+  }
+
+  upsertProviderAliasGroup(input: ProviderAliasGroupInput): ProviderAliasGroup {
+    const id = input.id?.trim() || 'provider-group-' + randomUUID();
+    const label = input.label.trim();
+    const rawValues = [...new Set(input.rawValues.map((value) => value.trim()).filter((value) => value.length > 0))].sort((a, b) => a.localeCompare(b));
+    if (label.length === 0) throw new Error('provider-alias-label-required');
+    if (rawValues.length === 0) throw new Error('provider-alias-values-required');
+    if (id.length > 160 || label.length > 200 || rawValues.some((value) => value.length > 300)) {
+      throw new Error('provider-alias-value-too-long');
+    }
+
+    const groups = this.listProviderAliasGroups();
+    const conflict = groups.find((group) => group.id !== id && group.rawValues.some((value) => rawValues.includes(value)));
+    if (conflict) throw new Error('provider-alias-overlap:' + conflict.label);
+
+    const now = this.now();
+    const existing = this.db.prepare('SELECT created_at FROM provider_alias_groups WHERE id=?').get(id) as { created_at?: number } | undefined;
+    const createdAt = existing?.created_at == null ? now : Number(existing.created_at);
+    this.db.prepare(`INSERT INTO provider_alias_groups (id, label, raw_values_json, created_at, updated_at)
+      VALUES (?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET label=excluded.label, raw_values_json=excluded.raw_values_json, updated_at=excluded.updated_at`)
+      .run(id, label, JSON.stringify(rawValues), createdAt, now);
+    return { id, label, rawValues };
+  }
+
+  deleteProviderAliasGroup(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM provider_alias_groups WHERE id=?').run(id);
+    return Number(result.changes ?? 0) > 0;
   }
 
   apply(records: readonly UsageRecord[]): BatchOutcome {

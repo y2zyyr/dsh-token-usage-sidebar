@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.3 — 2026-08-29
+
+### Filtering and local identity mappings
+- Added dynamic provider and model filters whose options come from the exact raw
+  names present in the selected range; no preset provider directory is injected.
+- Added local provider alias groups backed by the plugin-owned SQLite ledger.
+  Aliases affect only query/display grouping; raw provider values and accounting
+  records remain unchanged.
+- Added expandable provider/model bucket details and raw-provider breakdowns for
+  auditable merged totals.
+- Added validation preventing one raw provider from belonging to multiple alias
+  groups at the same time.
+- Added regression coverage for dynamic facets, exact matching, alias CRUD,
+  migration persistence, and backward-compatible aggregate queries.
+
 ## 1.1.2 — 2026-08-19
 
 ### Distribution
