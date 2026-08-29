@@ -174,7 +174,7 @@ v1.0.0/v1.0.1 会对可恢复的 DSH 持久会话事件做一次幂等重放，�
 
 ## 兼容性与状态
 
-当前插件版本：**v1.1.1**（npm 包 `@y2zyyr/dsh-token-usage-sidebar`；源码见 GitHub）。
+当前插件版本：**v1.1.4**（npm 包 `@y2zyyr/dsh-token-usage-sidebar`；源码见 GitHub）。
 
 已在支持的运行时（提供 Node 内置 `node:sqlite` 模块）上验证 DeepSeek Harness `0.1.0-rc.6` 的 `web` profile；未声明更广泛的 DSH 版本或操作系统兼容性。已在本地观察到其运行于更新版本的桌面端（如 DSH Desktop 2.0.0 / Node 26），但不做正式声明。
 

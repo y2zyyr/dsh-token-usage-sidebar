@@ -198,7 +198,7 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
 
 ## Compatibility and Status
 
-Current release: **v1.1.2** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
+Current release: **v1.1.4** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
 
 Verified with DeepSeek Harness `0.1.0-rc.6` and its `web` profile, on a runtime whose
 Node.js provides the built-in `node:sqlite` module (Node with `node:sqlite`).

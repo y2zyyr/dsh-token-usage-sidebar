@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.4 — 2026-08-29
+
+### Documentation
+- Corrected the current-release version shown in the English and Simplified
+  Chinese README files.
+
 ## 1.1.3 — 2026-08-29
 
 ### Filtering and local identity mappings
