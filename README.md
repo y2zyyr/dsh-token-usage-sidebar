@@ -208,13 +208,14 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
 
 ## Compatibility and Status
 
-Current release: **v1.1.6** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
+Current release: **v1.1.7** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
 
 Verified with DeepSeek Harness `0.1.0-rc.6` and its `web` profile, on a runtime whose
 Node.js provides the built-in `node:sqlite` module (Node with `node:sqlite`).
-No broader DSH-version or operating-system compatibility is claimed. Running against
-later desktop builds (e.g. DSH Desktop 2.0.0 / Node 26) has been observed locally but
-is not formally claimed.
+The package metadata also permits installation on DSH `0.2.0-rc.2`: it no longer
+requires `@deepseek-ai/dsh-storage-domain`, which this plugin does not use, and accepts
+Cordis `4.0.x`. Runtime behavior has not been separately smoke-tested on DSH
+`0.2.0-rc.2`; `node:sqlite` remains required.
 
 ### Reliability guarantees (v1.1)
 

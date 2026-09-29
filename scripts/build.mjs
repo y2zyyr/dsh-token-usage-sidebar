@@ -13,7 +13,6 @@ const PLUGIN_ID = packageJson.name;
 
 const hostExternals = [
   '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-storage-domain',
   '@deepseek-ai/dsh-storage',
   'zod',
   'node:fs',

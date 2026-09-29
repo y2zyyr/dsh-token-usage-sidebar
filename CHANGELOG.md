@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.7 — 2026-09-29
+
+### DSH 0.2 compatibility
+- Removed the unused `@deepseek-ai/dsh-storage-domain` host peer. The plugin owns its
+  SQLite ledger and does not import or call that package, so DSH 0.2.0-rc.2 no longer
+  fails installation because it provides storage-domain 0.2.0-rc.2 instead of 0.1.0-rc.6.
+- Widened the Cordis peer range to `^4.0.1`, covering the 4.0.4 runtime used by DSH
+  0.2.0-rc.2 while retaining compatibility with the previously tested 4.0.1 host.
+- No token accounting, storage, or runtime behavior changed.
+
 ## 1.1.6 — 2026-08-29
 
 ### Packaging compatibility
