@@ -176,12 +176,33 @@ function v1LedgerPath(dbPath: string): string {
 
 /** Services this plugin injects onto the cordis Context at runtime. */
 interface HostCtx {
-  sessions: { list(): Array<{ id: string; events?: readonly SessionEventLike[] }> };
+  sessions: { list(): ListedSessionLike[] };
   webRuntime: { trustedHosts?: unknown };
   webServer: { register(opts: unknown): unknown };
   on(event: string, listener: (session: unknown, event: SessionEventLike) => void): void;
   logger?: { warn?: (...args: unknown[]) => void };
   effect(fn: () => (() => void) | void, id?: string): unknown;
+}
+
+/** Session log accessors exposed by supported DSH generations. */
+interface ListedSessionLike {
+  id: string;
+  /** Older hosts exposed the event log as a property. */
+  events?: readonly SessionEventLike[];
+  /** DSH 0.2 exposes a frozen event snapshot through this method. */
+  snapshotEvents?: () => readonly SessionEventLike[];
+}
+
+function listedSessionEvents(session: ListedSessionLike): readonly SessionEventLike[] {
+  try {
+    if (typeof session.snapshotEvents === 'function') {
+      const events = session.snapshotEvents();
+      return Array.isArray(events) ? events : [];
+    }
+    return Array.isArray(session.events) ? session.events : [];
+  } catch {
+    return [];
+  }
 }
 
 export function apply(ctx: Context): void {
@@ -262,14 +283,14 @@ export function apply(ctx: Context): void {
       //    races either recovery path.
       //    Events recorded before this handler are captured in session logs and
       //    reconciled idempotently below.
-      let sessions: Array<{ id: string; events?: readonly SessionEventLike[] }> = [];
+      let sessions: ListedSessionLike[] = [];
       try {
         sessions = hctx.sessions.list ? [...hctx.sessions.list()] : [];
       } catch {
         sessions = [];
       }
       for (const s of sessions) {
-        const events = s.events ?? [];
+        const events = listedSessionEvents(s);
         if (events.length === 0) continue;
         agg.apply(collectSessionUsage({ sessionId: String(s.id), events }));
       }

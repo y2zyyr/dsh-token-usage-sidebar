@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.8 — 2026-09-29
+
+### Official DSH 0.2 runtime compatibility
+- Read existing session history through DSH 0.2's `snapshotEvents()` API, while
+  retaining support for older hosts that expose an `events` array.
+- Keep per-session history reads isolated so one unavailable session does not
+  prevent the plugin from starting or collecting live `session/event` updates.
+
 ## 1.1.7 — 2026-09-29
 
 ### DSH 0.2 compatibility
