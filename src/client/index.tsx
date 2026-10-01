@@ -8,9 +8,13 @@
 // interval + when the tab regains focus, so the numbers stay live without any
 // core-data-transport modification.
 import type { Context } from '@deepseek-ai/cordis';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, type JSX, type ComponentType } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { TokenUsageSettings } from './settings.tsx';
+import { isTokenCount } from '../usage/validation.ts';
+import { usageRequest } from './request.ts';
+import type { Summary } from './summary.ts';
+export type { Summary } from './summary.ts';
 
 declare const __DTSU_PLUGIN_VERSION__: string;
 
@@ -21,40 +25,30 @@ export const PLUGIN_REPOSITORY_URL = 'https://github.com/y2zyyr/dsh-token-usage-
 const SETTINGS_NS = 'dsh-token-usage-sidebar';
 const settingsLocale = {
   en: {
-    nav: 'Token Usage', title: 'Token Usage', today: 'Today', yesterday: 'Yesterday', details: 'Usage details', '7d': '7D', all: 'All time', total: 'Total', input: 'Input', output: 'Output', cacheRead: 'Cache read', cacheWrite: 'Cache write', reasoning: 'Reasoning', reasoningHint: 'included in output', calls: 'Calls', byModel: 'By provider and model', provider: 'Provider', model: 'Model', sevenDayDaily: 'Last 7 local days', date: 'Date', loading: 'Loading token usage…', unavailable: 'Usage data is temporarily unavailable.', noClassified: 'No classified usage in this range.', noMatching: 'No matching usage in this range.', unknown: '{tokens} tokens across {calls} calls cannot be classified from older records. They remain included in Total.', excludedUnknown: '{tokens} tokens across {calls} calls are unclassified and excluded from this filter.', providerFilter: 'Provider', modelFilter: 'Model', allProviders: 'All providers', allModels: 'All models', clearFilters: 'Clear filters', currentScope: 'Current scope', filterHelp: 'Filters use the exact names reported by DSH; the plugin does not define provider aliases.', rawBreakdown: 'Raw provider breakdown', expand: 'Show details', collapse: 'Hide details', aboutPlugin: 'About this plugin', version: 'Version', aboutDescription: 'Persistent local token-usage accounting for DeepSeek Harness.', aboutChanges: 'v1.1.8: adds DSH 0.2 session-history compatibility.', viewOnGithub: 'View project on GitHub',
+    unavailable: 'Usage data could not be refreshed.', lastUpdated: 'Last successful update', partialHistory: 'Some history could not be verified. Showing confirmed usage.', accountingAdjusted: 'Verified historical accounting adjustment', nav: 'Token Usage', title: 'Token Usage', today: 'Today', yesterday: 'Yesterday', details: 'Usage details', '7d': '7D', all: 'All time', total: 'Total', input: 'Input', output: 'Output', cacheRead: 'Cache read', cacheWrite: 'Cache write', reasoning: 'Reasoning', reasoningHint: 'included in output', calls: 'Calls', byModel: 'By provider and model', provider: 'Provider', model: 'Model', sevenDayDaily: 'Last 7 local days', date: 'Date', loading: 'Loading token usage…', noClassified: 'No classified usage in this range.', noMatching: 'No matching usage in this range.', unknown: '{tokens} tokens across {calls} calls cannot be classified from older records. They remain included in Total.', excludedUnknown: '{tokens} tokens across {calls} calls are unclassified and excluded from this filter.', providerFilter: 'Provider', modelFilter: 'Model', allProviders: 'All providers', allModels: 'All models', clearFilters: 'Clear filters', currentScope: 'Current scope', filterHelp: 'Filters use the exact names reported by DSH; the plugin does not define provider aliases.', rawBreakdown: 'Raw provider breakdown', expand: 'Show details', collapse: 'Hide details', aboutPlugin: 'About this plugin', version: 'Version', aboutDescription: 'Persistent local token-usage accounting for DeepSeek Harness.', aboutChanges: 'v1.1.8: adds DSH 0.2 session-history compatibility.', viewOnGithub: 'View project on GitHub',
   },
   zh: {
-    nav: 'Token 用量', title: 'Token 用量', today: '今天', yesterday: '昨天', details: '用量明细', '7d': '7 天', all: '全部时间', total: '总计', input: '输入', output: '输出', cacheRead: '缓存读取', cacheWrite: '缓存写入', reasoning: '推理', reasoningHint: '已包含在输出中', calls: '调用次数', byModel: '按供应商和模型', provider: '供应商', model: '模型', sevenDayDaily: '最近 7 个本地自然日', date: '日期', loading: '正在加载 Token 用量…', unavailable: 'Token 用量暂时不可用。', noClassified: '这个范围内没有可分类的用量。', noMatching: '当前范围内没有匹配用量。', unknown: '有 {tokens} tokens、{calls} 次调用无法从旧记录中分类；它们仍计入总计。', excludedUnknown: '有 {tokens} tokens、{calls} 次调用未分类，因此未计入当前筛选。', providerFilter: '供应商', modelFilter: '模型', allProviders: '全部供应商', allModels: '全部模型', clearFilters: '清除筛选', currentScope: '当前范围', filterHelp: '筛选使用 DSH 实际上报的精确名称；插件不再要求单独配置供应商别名。', rawBreakdown: '原始供应商名称明细', expand: '展开明细', collapse: '收起明细', aboutPlugin: '关于插件', version: '版本', aboutDescription: '为 DeepSeek Harness 提供本地持久化 Token 用量统计。', aboutChanges: 'v1.1.8：支持 DSH 0.2 的会话历史读取。', viewOnGithub: '在 GitHub 查看项目',
+    unavailable: '用量暂时无法更新。', lastUpdated: '上次成功更新', partialHistory: '部分历史尚未核实，当前显示已确认的用量。', accountingAdjusted: '已核实的历史用量调整', nav: 'Token 用量', title: 'Token 用量', today: '今天', yesterday: '昨天', details: '用量明细', '7d': '7 天', all: '全部时间', total: '总计', input: '输入', output: '输出', cacheRead: '缓存读取', cacheWrite: '缓存写入', reasoning: '推理', reasoningHint: '已包含在输出中', calls: '调用次数', byModel: '按供应商和模型', provider: '供应商', model: '模型', sevenDayDaily: '最近 7 个本地自然日', date: '日期', loading: '正在加载 Token 用量…', noClassified: '这个范围内没有可分类的用量。', noMatching: '当前范围内没有匹配用量。', unknown: '有 {tokens} tokens、{calls} 次调用无法从旧记录中分类；它们仍计入总计。', excludedUnknown: '有 {tokens} tokens、{calls} 次调用未分类，因此未计入当前筛选。', providerFilter: '供应商', modelFilter: '模型', allProviders: '全部供应商', allModels: '全部模型', clearFilters: '清除筛选', currentScope: '当前范围', filterHelp: '筛选使用 DSH 实际上报的精确名称；插件不再要求单独配置供应商别名。', rawBreakdown: '原始供应商名称明细', expand: '展开明细', collapse: '收起明细', aboutPlugin: '关于插件', version: '版本', aboutDescription: '为 DeepSeek Harness 提供本地持久化 Token 用量统计。', aboutChanges: 'v1.1.8：支持 DSH 0.2 的会话历史读取。', viewOnGithub: '在 GitHub 查看项目',
   },
 };
 
 // ── summary wire shape ─────────────────────────────────────────────────────
-export interface Summary {
-  todayTotal: number;
-  yesterdayTotal: number;
-  lifetimeTotal: number;
-  todayDate: string;
-  recordCount: number;
-  serverNow: string;
-}
-
 const SUMMARY_URL = '/token-usage/api/summary';
 
 export async function fetchSummary(signal?: AbortSignal): Promise<Summary | undefined> {
   try {
-    const res = await fetch(SUMMARY_URL, {
+    const res = await usageRequest(SUMMARY_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
-      signal,
       cache: 'no-store',
-    });
+    }, signal);
     if (!res.ok) return undefined;
-    const json: unknown = await res.json().catch(() => undefined);
+    const json: unknown = res.body;
     const value = (json as { ok?: boolean; value?: Partial<Summary> })?.ok === true
       ? (json as { value: Partial<Summary> }).value
       : undefined;
-    if (!value) return undefined;
+    if (!value || ![value.todayTotal, value.yesterdayTotal, value.lifetimeTotal, value.recordCount].every(isTokenCount)) return undefined;
     return {
       todayTotal: Number(value.todayTotal) || 0,
       yesterdayTotal: Number(value.yesterdayTotal) || 0,
@@ -62,6 +56,7 @@ export async function fetchSummary(signal?: AbortSignal): Promise<Summary | unde
       todayDate: value.todayDate ?? '',
       recordCount: Number(value.recordCount) || 0,
       serverNow: value.serverNow ?? '',
+      health: value.health,
     };
   } catch {
     return undefined;
@@ -91,31 +86,32 @@ const styleTagId = 'dsh-token-usage-sidebar/summary.css';
 
 interface TokenUsageSidebarProps {
   wide?: boolean;
+  t?: (key: string) => string;
 }
 
 export function TokenUsageSidebar(_props: TokenUsageSidebarProps): JSX.Element {
+  const t = _props.t ?? ((key: string) => (settingsLocale.en as Record<string, string>)[key] ?? key);
+  const [lastUpdated, setLastUpdated] = useState<number>();
+  const request = useRef<AbortController | undefined>(undefined);
   const [summary, setSummary] = useState<Summary | undefined>(undefined);
   const [connected, setConnected] = useState<boolean | undefined>(undefined);
   const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
-  const summaryRef = useRef<Summary | undefined>(undefined);
-  summaryRef.current = summary;
 
   const refresh = useCallback(async () => {
-    const s = await fetchSummary();
-    if (s) {
-      setSummary(s);
-      setConnected(true);
-    } else {
-      // Only mark disconnected when we had (or expected) an established link.
-      setConnected((prev) => (prev === undefined ? undefined : true));
-    }
-    // Keep failed probes from flipping a working display to blank.
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    const value = await fetchSummary(controller.signal);
+    if (controller.signal.aborted || request.current !== controller) return;
+    if (value) {
+      setSummary(value); setConnected(true); setLastUpdated(Date.now());
+    } else setConnected(false);
   }, []);
 
   useEffect(() => {
     void refresh();
-    timer.current = setInterval(() => { void refresh(); }, 4000);
-    return () => { if (timer.current !== undefined) clearInterval(timer.current); };
+    if (!document.hidden) timer.current = setInterval(() => { void refresh(); }, 4000);
+    return () => { if (timer.current !== undefined) clearInterval(timer.current); request.current?.abort(); request.current = undefined; };
   }, [refresh]);
 
   // Pause polling while the tab is hidden; resume on visibility.
@@ -123,6 +119,7 @@ export function TokenUsageSidebar(_props: TokenUsageSidebarProps): JSX.Element {
     const onVis = () => {
       if (document.hidden) {
         if (timer.current !== undefined) { clearInterval(timer.current); timer.current = undefined; }
+        request.current?.abort();
       } else if (timer.current === undefined) {
         void refresh();
         timer.current = setInterval(() => { void refresh(); }, 4000);
@@ -158,19 +155,21 @@ html[data-dsh-desktop=true] .dtsu-w{border-color:transparent}
 
   return (
     <div className={'dtsu-w' + (ready ? '' : ' dtsu-empty')} data-dsh-token-usage-sidebar="1">
-      <div className="dtsu-t">Token Usage</div>
+      <div className="dtsu-t">{t('title')}</div>
       <div className="dtsu-r">
-        <span className="dtsu-k">Today</span>
+        <span className="dtsu-k">{t('today')}</span>
         <span className="dtsu-v" title={summary ? summary.todayTotal.toLocaleString('en-US') + ' tokens' : undefined}>{today}</span>
       </div>
       <div className="dtsu-r">
-        <span className="dtsu-k">Yesterday</span>
+        <span className="dtsu-k">{t('yesterday')}</span>
         <span className="dtsu-v" title={summary ? summary.yesterdayTotal.toLocaleString('en-US') + ' tokens' : undefined}>{yesterday}</span>
       </div>
       <div className="dtsu-r">
-        <span className="dtsu-k">Total</span>
+        <span className="dtsu-k">{t('total')}</span>
         <span className="dtsu-v" title={summary ? summary.lifetimeTotal.toLocaleString('en-US') + ' tokens' : undefined}>{total}</span>
       </div>
+      {connected === false && <div role="status" style={{ fontSize: 10, opacity: .7 }}>{t('unavailable')}{lastUpdated ? ' ' + t('lastUpdated') + ': ' + new Date(lastUpdated).toLocaleTimeString() : ''}</div>}
+      {connected !== false && summary?.health?.status === 'partial' && <div role="status" style={{ fontSize: 10, opacity: .7 }}>{t('partialHistory')}</div>}
     </div>
   );
 }
@@ -211,7 +210,7 @@ function findNewSessionButton(): HTMLButtonElement | undefined {
   return buttons.find(isLikelyNewSessionButton);
 }
 
-function mountLegacySidebarFallback(): () => void {
+function mountLegacySidebarFallback(t: (key: string) => string): () => void {
   if (typeof document === 'undefined' || !document.body) return () => {};
   let mount: HTMLDivElement | undefined;
   let root: Root | undefined;
@@ -237,7 +236,7 @@ function mountLegacySidebarFallback(): () => void {
     mount.dataset.dshTokenUsageSidebarFallback = '1';
     target.parentElement.insertBefore(mount, target);
     root = createRoot(mount);
-    root.render(<TokenUsageSidebar />);
+    root.render(<TokenUsageSidebar t={t} />);
     const updateCollapsedVisibility = () => {
       if (mount) mount.style.display = target.getBoundingClientRect().width < 100 ? 'none' : '';
     };
@@ -254,26 +253,32 @@ function mountLegacySidebarFallback(): () => void {
   };
 }
 
+interface ClientServices {
+  locale: { register(namespace: string, messages: unknown): () => void; bind(namespace: string): (key: string) => string };
+  slots: { inject(name: string, callback: () => unknown): () => void; register(config: unknown, component: ComponentType<any>): () => void };
+}
+
 // ── client plugin body ─────────────────────────────────────────────────────
 export function apply(ctx: Context): void {
-  ctx.effect(() => ctx.locale.register(SETTINGS_NS, settingsLocale), 'dsh-token-usage-sidebar: locale');
-  const t = ctx.locale.bind(SETTINGS_NS) as (key: string) => string;
+  const client = ctx as Context & ClientServices;
+  ctx.effect(() => client.locale.register(SETTINGS_NS, settingsLocale), 'dsh-token-usage-sidebar: locale');
+  const t = client.locale.bind(SETTINGS_NS) as (key: string) => string;
   ctx.effect(() => {
     let slotMounted = false;
     let fallbackDispose: (() => void) | undefined;
     const fallbackTimer = window.setTimeout(() => {
-      if (!slotMounted) fallbackDispose = mountLegacySidebarFallback();
+      if (!slotMounted) fallbackDispose = mountLegacySidebarFallback(t);
     }, 400);
-    const slotDispose = ctx.slots.inject('sidebar.leading', () => {
+    const slotDispose = client.slots.inject('sidebar.leading', () => {
       slotMounted = true;
       window.clearTimeout(fallbackTimer);
       fallbackDispose?.();
       fallbackDispose = undefined;
-      return ctx.slots.register(
+      return client.slots.register(
         {
           name: 'sidebar.leading',
           registrant: 'dsh-token-usage-sidebar',
-          inject: () => ({}),
+          inject: () => ({ t }),
         },
         TokenUsageSidebar,
       );
@@ -284,7 +289,7 @@ export function apply(ctx: Context): void {
       slotDispose?.();
     };
   }, 'dsh-token-usage-sidebar: sidebar placement');
-  ctx.slots.inject('settings.section', () => ctx.slots.register(
+  client.slots.inject('settings.section', () => client.slots.register(
     {
       name: 'settings.section', id: 'token-usage', order: 25,
       label: () => t('nav'), locale: SETTINGS_NS,

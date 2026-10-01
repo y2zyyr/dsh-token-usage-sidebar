@@ -14,7 +14,7 @@
       "default": "./lib/index.js"
     },
     "./client": {
-      "types": "./lib/types/client/index.d.ts",
+      "types": "./lib/types/client/loader.d.ts",
       "default": "./lib/client.js"
     },
     "./package.json": "./package.json"
@@ -57,12 +57,19 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "check:package": "node scripts/check-package.mjs",
     "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
     "@types/node": "^22.15.0",
-    "esbuild": "^0.24.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "esbuild": "^0.25.12",
+    "jsdom": "^26.1.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "typescript": "^5.6.0"
   },
   "peerDependencies": {

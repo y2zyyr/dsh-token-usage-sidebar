@@ -2,8 +2,11 @@
 // Idempotent, crash-safe, verifiable, rollback-safe, no token loss, no double count.
 // v1 JSON is READ-ONLY; SQLite written transactionally; cut over only after verify.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, constants } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { inTransaction } from './wrapper.ts';
+import { assertUsageRecord, isTokenCount } from '../validation.ts';
 import type { UsageRecord, UsageSourceType } from '../types.ts';
 import { DurableStore } from './durableStore.ts';
 
@@ -18,46 +21,92 @@ export interface V1LedgerState {
 export interface MigrationResult { migrated: boolean; status: 'done' | 'failed' | 'not_started'; sourceFound: boolean; migratedRecords: number; v1LifetimeTotal: number; v11LifetimeTotal: number; durationMs: number; verification: string[]; backupPath?: string; skippedBecauseDone?: boolean; }
 export interface MigrationOptions { v1Root?: V1LedgerState; v1Path?: string; backupDir?: string; now?: () => number; noBackup?: boolean; }
 
-export function readV1Root(v1Path: string): V1LedgerState | undefined {
-  let text: string; try { text = readFileSync(v1Path, 'utf8'); } catch { return undefined; }
-  try { const doc = JSON.parse(text) as { tables?: { ledger?: { root?: V1LedgerState } } }; return doc?.tables?.ledger?.root; } catch { return undefined; }
+export type V1ReadResult = { status: 'absent' } | { status: 'invalid'; message: string } | { status: 'ok'; root: V1LedgerState };
+
+export function readV1RootResult(v1Path: string): V1ReadResult {
+  if (!existsSync(v1Path)) return { status: 'absent' };
+  try {
+    const document = JSON.parse(readFileSync(v1Path, 'utf8')) as { tables?: { ledger?: { root?: unknown } } };
+    const root = document?.tables?.ledger?.root;
+    if (!root || typeof root !== 'object' || Array.isArray(root)) return { status: 'invalid', message: 'invalid v1 ledger root' };
+    validateV1(root as V1LedgerState);
+    return { status: 'ok', root: root as V1LedgerState };
+  } catch { return { status: 'invalid', message: 'unreadable or invalid v1 ledger' }; }
 }
+
+/** Compatibility reader. Host code uses the discriminated result above. */
+export function readV1Root(v1Path: string): V1LedgerState | undefined {
+  const result = readV1RootResult(v1Path);
+  return result.status === 'ok' ? result.root : undefined;
+}
+
+function validateV1(v1: V1LedgerState): UsageRecord[] {
+  if (!v1 || typeof v1 !== 'object' || Array.isArray(v1)) throw new Error('invalid v1 ledger root');
+  if (v1.byId !== undefined && (!v1.byId || typeof v1.byId !== 'object' || Array.isArray(v1.byId))) throw new Error('invalid v1 byId');
+  const records = buildRecordsFromV1(v1);
+  for (const record of records) assertUsageRecord(record);
+  const total = records.reduce((sum, record) => sum + record.totalTokens, 0);
+  if (!isTokenCount(total) || !isTokenCount(v1.lifetimeTotal ?? 0) || total !== (v1.lifetimeTotal ?? 0)) throw new Error('v1 lifetimeTotal mismatch');
+  if (!isTokenCount(v1.recordCount ?? records.length) || (v1.recordCount ?? records.length) !== records.length) throw new Error('v1 recordCount mismatch');
+  return records;
+}
+
 export function backupV1Ledger(v1Path: string | undefined, backupDir?: string): string | undefined {
   if (!v1Path || !existsSync(v1Path)) return undefined;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dir = backupDir ?? dirname(v1Path); mkdirSync(dir, { recursive: true });
-  const dest = join(dir, `dsh_token_usage_sidebar.json.pre-v1.1-${stamp}.bak`);
-  copyFileSync(v1Path, dest); return dest;
+  const dir = backupDir ?? dirname(v1Path);
+  mkdirSync(dir, { recursive: true });
+  const dest = join(dir, 'dsh_token_usage_sidebar.json.pre-v1.1-' + stamp + '-' + randomUUID() + '.bak');
+  copyFileSync(v1Path, dest, constants.COPYFILE_EXCL);
+  return dest;
 }
+
 export function migrateV1Ledger(dest: DurableStore, opts: MigrationOptions): MigrationResult {
-  const t0 = Date.now();
-  const existing = dest.readMeta();
-  if (existing?.migrationStatus === 'done' && existing.migrationVersion >= V1_MIGRATION_VERSION) {
-    const total = (existing.liveRecordedTotal ?? 0) + (existing.historicalRecoveredTotal ?? 0);
-    return { migrated: false, status: 'done', sourceFound: false, migratedRecords: 0, v1LifetimeTotal: total, v11LifetimeTotal: total, durationMs: 0, verification: [], skippedBecauseDone: true };
+  const started = Date.now();
+  const existing = dest.readMeta()!;
+  const currentTotal = () => dest.globalAggregate()?.total_tokens ?? 0;
+  const result = (status: MigrationResult['status'], extra: Partial<MigrationResult> = {}): MigrationResult => ({
+    migrated: status === 'done', status, sourceFound: false, migratedRecords: 0,
+    v1LifetimeTotal: 0, v11LifetimeTotal: currentTotal(), durationMs: Date.now() - started, verification: [], ...extra,
+  });
+  if (existing.migrationStatus === 'done' && existing.migrationVersion >= V1_MIGRATION_VERSION) {
+    return result('done', { migrated: false, skippedBecauseDone: true });
   }
   let v1 = opts.v1Root;
-  if (!v1 && opts.v1Path) v1 = readV1Root(opts.v1Path);
-  if (!v1) return { migrated: false, status: 'not_started', sourceFound: false, migratedRecords: 0, v1LifetimeTotal: 0, v11LifetimeTotal: 0, durationMs: 0, verification: [] };
-  const backupPath = opts.noBackup ? undefined : backupV1Ledger(opts.v1Path, opts.backupDir);
-  { const m = dest.readMeta(); dest.writeMeta({ ...(m ?? dest.newMeta()), migrationStatus: 'in_progress', migrationVersion: V1_MIGRATION_VERSION }); }
-  const records = buildRecordsFromV1(v1);
-  dest.apply(records);
-  dest.rebuildAggregates();
-  const verification = verifyV1ToV11(dest, v1, records);
-  const v11LifetimeTotal = dest.globalAggregate()?.total_tokens ?? 0;
-  const v1LifetimeTotal = v1.lifetimeTotal ?? 0;
-  const finalMeta = dest.readMeta()!;
-  if (verification.length > 0) {
-    // FAIL-CLOSED: do not cut over. Remove exactly the records this migration
-    // introduced (they must never become visible unverified), rebuild aggregates
-    // from whatever remains (pre-existing live records), then mark failed.
-    dest.removeRecords(records.map((r) => r.id));
-    dest.writeMeta({ ...dest.readMeta() ?? finalMeta, migrationStatus: 'failed' });
-    return { migrated: false, status: 'failed', sourceFound: true, migratedRecords: records.length, v1LifetimeTotal, v11LifetimeTotal, durationMs: Date.now() - t0, verification, backupPath };
+  let backupPath: string | undefined;
+  let records: UsageRecord[] = [];
+  try {
+    if (!v1 && opts.v1Path) {
+      const read = readV1RootResult(opts.v1Path);
+      if (read.status === 'absent') return result('not_started');
+      if (read.status === 'invalid') throw new Error(read.message);
+      v1 = read.root;
+    }
+    if (!v1) return result('not_started');
+    records = validateV1(v1);
+    backupPath = opts.noBackup ? undefined : backupV1Ledger(opts.v1Path, opts.backupDir);
+    inTransaction(dest.database, () => {
+      const before = currentTotal();
+      const prior = new Map(records.map((record) => [record.id, dest.getRecord(record.id)]));
+      dest.writeMeta({ ...dest.readMeta()!, migrationStatus: 'in_progress', migrationVersion: V1_MIGRATION_VERSION });
+      dest.apply(records);
+      dest.rebuildAggregates();
+      const failures = verifyV1ToV11(dest, v1!, records, { total: before, rows: prior });
+      if (failures.length > 0) throw new Error(failures.join('; '));
+      dest.writeMeta({
+        ...dest.readMeta()!, migrationStatus: 'done', migrationVersion: V1_MIGRATION_VERSION,
+        earliestRecordAt: dest.earliestRecordAt(), latestRecordAt: dest.latestRecordAt(),
+        recoveryJson: v1!.recovery ? JSON.stringify(v1!.recovery) : null,
+      });
+    });
+    return result('done', { sourceFound: true, migratedRecords: records.length, v1LifetimeTotal: v1.lifetimeTotal ?? 0, backupPath });
+  } catch (error) {
+    // The enclosing transaction restores overwritten rows, aggregates and meta.
+    // No record deletion by id is used as a substitute for rollback.
+    dest.writeMeta({ ...dest.readMeta()!, migrationStatus: 'failed' });
+    return result('failed', { migrated: false, sourceFound: !!v1 || !!opts.v1Path,
+      v1LifetimeTotal: v1?.lifetimeTotal ?? 0, backupPath, verification: [String((error as Error).message ?? error)] });
   }
-  dest.writeMeta({ ...finalMeta, migrationStatus: 'done', migrationVersion: V1_MIGRATION_VERSION, earliestRecordAt: dest.earliestRecordAt(), latestRecordAt: dest.latestRecordAt(), recoveryJson: v1.recovery ? JSON.stringify(v1.recovery) : null });
-  return { migrated: true, status: 'done', sourceFound: true, migratedRecords: records.length, v1LifetimeTotal, v11LifetimeTotal, durationMs: Date.now() - t0, verification, backupPath };
 }
 export function buildRecordsFromV1(v1: V1LedgerState): UsageRecord[] {
   const byId = v1.byId ?? {}; const detailBy = v1.detailBy ?? {}; const dayBy = v1.dayBy ?? {}; const seqBy = v1.seqBy ?? {}; const src = v1.src ?? {};
@@ -72,13 +121,25 @@ export function buildRecordsFromV1(v1: V1LedgerState): UsageRecord[] {
   }
   return out;
 }
-export function verifyV1ToV11(dest: DurableStore, v1: V1LedgerState, records: UsageRecord[]): string[] {
+export function verifyV1ToV11(
+  dest: DurableStore, v1: V1LedgerState, records: UsageRecord[],
+  before: { total: number; rows: Map<string, Record<string, unknown> | undefined> } = { total: 0, rows: new Map() },
+): string[] {
   const failures: string[] = [];
-  const v1Lifetime = v1.lifetimeTotal ?? 0; const v1Count = v1.recordCount ?? Object.keys(v1.byId ?? {}).length;
-  const v11Lifetime = dest.globalAggregate()?.total_tokens ?? 0; const v11Count = dest.recordCount();
-  if (v1Lifetime !== v11Lifetime) failures.push(`lifetimeTotal mismatch: v1=${v1Lifetime} v1.1=${v11Lifetime}`);
-  if (v1Count !== v11Count) failures.push(`recordCount mismatch: v1=${v1Count} v1.1=${v11Count}`);
-  const sumRecords = records.reduce((a, r) => a + r.totalTokens, 0);
-  if (sumRecords !== v11Lifetime) failures.push(`sum(records)=${sumRecords} != v1.1 global=${v11Lifetime}`);
+  if (records.reduce((sum, record) => sum + record.totalTokens, 0) !== (v1.lifetimeTotal ?? 0)) failures.push('v1 source total mismatch');
+  let delta = 0;
+  for (const record of records) {
+    const previous = before.rows.get(record.id);
+    const stored = dest.getRecord(record.id);
+    if (!stored) { failures.push('missing migrated record'); continue; }
+    const previousTotal = previous?.excluded_reason == null ? Number(previous?.total_tokens ?? 0) : 0;
+    const storedTotal = stored.excluded_reason == null ? Number(stored.total_tokens) : 0;
+    delta += storedTotal - previousTotal;
+    if (!previous && (storedTotal !== record.totalTokens || Number(stored.seq) !== record.seq)) failures.push('migrated record mismatch');
+    if (previous && (Number(previous.seq) >= record.seq || Number(previous.accounting_version) > 1)
+      && (storedTotal !== previousTotal || Number(stored.seq) !== Number(previous.seq))) failures.push('newer existing record changed');
+  }
+  if ((dest.globalAggregate()?.total_tokens ?? 0) !== before.total + delta) failures.push('migration union total mismatch');
+  failures.push(...dest.verifyAggregates().details);
   return failures;
 }

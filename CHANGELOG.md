@@ -2,6 +2,50 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Accounting and recovery
+- Add accounting version 2: read DSH 0.2 attempt usage and stream fallbacks, preserve
+  explicit retry boundaries across live events and restart checkpoints, and exclude
+  fork-inherited events from child accounting.
+- Correct legacy attempt identities only after a complete validated source replay,
+  keeping an immutable SQLite backup and numeric before/after audit. Unverifiable
+  legacy history remains counted; inherited rows are retained with an exclusion flag.
+- Recover cold sessions through the official DSH 0.1/0.2 `sessionPersistence` APIs.
+  Verify checkpoints before folding appended events and always close read handles.
+- Prefer lightweight source revisions to skip unchanged logs; invalidate checkpoints
+  on new legacy records or aggregate repair and refuse stale asynchronous commits.
+- Preserve provisional live samples when snapshots fail, then reconcile after a
+  complete snapshot becomes readable; unknown fork ownership is never guessed.
+- Make JSON migration a verified union with existing SQLite history. Failed imports
+  roll back overwritten rows, aggregates, and metadata together.
+- Reject negative, fractional, non-finite, unsafe, or missing token totals before
+  writes. Startup checks every aggregate field and repairs caches from valid records.
+- Keep dated unclassified tokens consistent across writes/rebuilds. Daily totals
+  include them once, and unfiltered seven-day results retain all seven local dates.
+
+### Performance and presentation
+- Cache prepared statements; use aggregate call counts for summaries; skip subscriber
+  notifications when none exist. Query day/model aggregates once within indexed dates.
+- Match inherited fork identities through a lookup map rather than nested row scans.
+- Cache successful legacy JSON imports using file identity/size/mtime/ctime metadata.
+  Changed files, failed scans, and aggregate repairs invalidate reuse.
+- Return explicit initialization/recovery errors instead of successful zero totals;
+  include source scan, partial coverage, and accounting adjustment diagnostics.
+- Abort obsolete browser probes, bound headers and body reads with a deadline, retain
+  matching stale data with a timestamp, and hide mismatched range/filter data.
+- Localize sidebar labels and expose partial-history and verified adjustment notices.
+
+### Validation and packaging
+- Type-check TSX and emit packaged declarations with resolvable sibling imports.
+  The public browser-loader contract avoids internal React type dependencies.
+- Add synthetic integrity, host-route, React DOM, checkpoint, and cache regressions;
+  audit the npm archive and compile external NodeNext/Bundler type consumers in CI.
+- Update the development esbuild dependency and document migration/rollback behavior.
+
+These changes have not been published. Real DSH boot/UI smoke testing remains
+unverified; automated adapters follow the inspected official persistence contracts.
+
 ## 1.1.8 — 2026-09-29
 
 ### Official DSH 0.2 runtime compatibility

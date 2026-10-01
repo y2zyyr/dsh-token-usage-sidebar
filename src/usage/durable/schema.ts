@@ -1,6 +1,6 @@
 // src/usage/durable/schema.ts — SQLite schema (v1.1 scalable durable ledger)
 // usage_records = authoritative source of truth; aggregate_* = derived cache.
-export const STORAGE_SCHEMA_VERSION = 2;
+export const STORAGE_SCHEMA_VERSION = 3;
 export const SCHEMA_SQL: readonly string[] = [
   'CREATE TABLE IF NOT EXISTS usage_records (' +
   'canonical_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn INTEGER NOT NULL, ' +
@@ -8,7 +8,8 @@ export const SCHEMA_SQL: readonly string[] = [
   'provider TEXT, model TEXT, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, ' +
   'cache_read_tokens INTEGER NOT NULL, cache_write_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL, ' +
   'total_tokens INTEGER NOT NULL, unclassified INTEGER NOT NULL DEFAULT 0, source_type TEXT, historical_or_live TEXT, ' +
-  'migration_version INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, schema_version INTEGER NOT NULL)',
+  'migration_version INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, schema_version INTEGER NOT NULL, ' +
+  'accounting_version INTEGER NOT NULL DEFAULT 1, excluded_reason TEXT)',
   'CREATE TABLE IF NOT EXISTS aggregate_global (id INTEGER PRIMARY KEY CHECK (id=1), total_tokens INTEGER NOT NULL, ' +
   'input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL, ' +
   'cache_write_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL, calls INTEGER NOT NULL, ' +
@@ -32,6 +33,15 @@ export const SCHEMA_SQL: readonly string[] = [
   'historical_recovered_record_count INTEGER NOT NULL DEFAULT 0, recovery_json TEXT)',
   'CREATE INDEX IF NOT EXISTS idx_usage_records_date ON usage_records(local_date)',
   'CREATE INDEX IF NOT EXISTS idx_usage_records_provider_model ON usage_records(provider, model)',
+  'CREATE INDEX IF NOT EXISTS idx_usage_records_session ON usage_records(session_id)',
+  'CREATE TABLE IF NOT EXISTS accounting_changes (' +
+  'id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, accounting_version INTEGER NOT NULL, ' +
+  'before_total INTEGER NOT NULL, after_total INTEGER NOT NULL, before_records_json TEXT NOT NULL, ' +
+  'reason TEXT NOT NULL, verified_at INTEGER NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS session_recovery (' +
+  'session_id TEXT PRIMARY KEY, accounting_version INTEGER NOT NULL, checkpoint_json TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS source_discovery_cache (' +
+  'id INTEGER PRIMARY KEY CHECK (id=1), cache_json TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS provider_alias_groups (' +
   'id TEXT PRIMARY KEY, label TEXT NOT NULL, raw_values_json TEXT NOT NULL, ' +
   'created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)',

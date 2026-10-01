@@ -70,7 +70,7 @@ test('a later sample for the SAME (turn,step) REPLACES, not adds', () => {
   assert.equal(aggregateOf(l).recordCount, 1);
 });
 
-test('a retried invocation is one record (only final counts)', () => {
+test('legacy memory ledger replaces higher-sequence samples with the same invocation id', () => {
   let l = emptyLedger();
   const attempt1 = rec('s1:3:0', 5000, DAY('2026-08-16'), 10);
   const attempt2 = rec('s1:3:0', 7000, DAY('2026-08-16'), 20);

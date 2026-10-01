@@ -1,10 +1,10 @@
 // Source-discovery tests use only synthetic DSH storage-unit fixtures.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, statSync, utimesSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discoverTokenSources } from '../src/usage/durable/sourceDiscovery.ts';
+import { discoverTokenSources, importTokenSources } from '../src/usage/durable/sourceDiscovery.ts';
 import { DurableStore } from '../src/usage/durable/durableStore.ts';
 
 function tempDir() {
@@ -102,4 +102,57 @@ test('reports a partial discovery when a recognized unit is malformed', () => {
   assert.equal(result.records.length, 1);
   assert.equal(result.records[0].totalTokens, 7);
   assert.ok(result.errors.some((message) => message.includes('JSON parse failed')));
+});
+
+test('successful source imports survive restart and cache unchanged files without replaying records', () => {
+  const dir = tempDir(), path = join(dir, 'usage.sqlite'), name = 'dsh_token_usage_day_20260829.json';
+  writeRecordUnit(dir, name, [record('cached:1:0', 10)]);
+  const original = statSync(join(dir, name));
+  const first = new DurableStore({ path });
+  assert.equal(importTokenSources(first, dir).applied, 1); first.close();
+  const store = new DurableStore({ path }); const apply = store.apply.bind(store);
+  store.apply = () => { throw new Error('unchanged source must not be replayed'); };
+  const cached = importTokenSources(store, dir);
+  assert.equal(cached.discovery.cached, true); assert.equal(cached.discovery.aggregateChecks.discoveredRecordCount, 1);
+  assert.equal(cached.applied, 0); assert.equal(store.globalAggregate().total_tokens, 10); store.apply = apply;
+  // Same size and restored mtime still invalidates via inode/ctime metadata.
+  writeRecordUnit(dir, name, [record('cached:1:0', 20, 2)]);
+  utimesSync(join(dir, name), original.atime, original.mtime);
+  const changed = importTokenSources(store, dir);
+  assert.notEqual(changed.discovery.cached, true); assert.equal(changed.applied, 1); assert.equal(store.globalAggregate().total_tokens, 20);
+  unlinkSync(join(dir, name)); assert.equal(importTokenSources(store, dir).discovery.status, 'none');
+  assert.equal(store.globalAggregate().total_tokens, 20); store.close();
+});
+
+test('failed source scans are never cached as successful and are retried after repair', () => {
+  const dir = tempDir(), name = 'dsh_token_usage_day_20260829.json';
+  writeFileSync(join(dir, name), '{broken'); const store = new DurableStore({ path: join(dir, 'usage.sqlite') });
+  for (let i = 0; i < 2; i += 1) {
+    const result = importTokenSources(store, dir); assert.equal(result.discovery.status, 'failed'); assert.notEqual(result.discovery.cached, true);
+  }
+  writeRecordUnit(dir, name, [record('repaired:1:0', 10)]);
+  assert.equal(importTokenSources(store, dir).applied, 1); assert.equal(store.globalAggregate().total_tokens, 10); store.close();
+});
+
+test('source cache and imported records commit together; repaired aggregates invalidate the cache', () => {
+  const dir = tempDir(), path = join(dir, 'usage.sqlite');
+  writeRecordUnit(dir, 'dsh_token_usage_day_20260829.json', [record('atomic:1:0', 10)]);
+  const store = new DurableStore({ path }); const save = store.writeSourceDiscoveryCache.bind(store);
+  store.writeSourceDiscoveryCache = () => { throw new Error('simulated interruption'); };
+  assert.throws(() => importTokenSources(store, dir), /simulated interruption/);
+  assert.equal(store.recordCount(), 0); assert.equal(store.readSourceDiscoveryCache(), undefined);
+  store.writeSourceDiscoveryCache = save; assert.equal(importTokenSources(store, dir).applied, 1);
+  store.database.exec('DELETE FROM usage_records'); store.close();
+  const reopened = new DurableStore({ path }); assert.equal(reopened.repairedOnOpen, true);
+  assert.equal(importTokenSources(reopened, dir).applied, 1); assert.equal(reopened.globalAggregate().total_tokens, 10); reopened.close();
+});
+
+test('invalid source buckets and missing totals are rejected instead of being coerced into calls', () => {
+  const dir = tempDir();
+  writeRecordUnit(dir, 'dsh_token_usage_day_20260829.json', [record('good:1:0', 10),
+    record('negative:1:0', 10, 1, undefined, { cacheReadTokens: -1 }),
+    record('fractional:1:0', 10, 1, undefined, { seq: 1.5 }),
+    record('missing:1:0', 10, 1, undefined, { totalTokens: undefined })]);
+  const result = discoverTokenSources(dir); assert.equal(result.status, 'partial'); assert.equal(result.errors.length, 3);
+  assert.deepEqual(result.records.map((item) => item.id), ['good:1:0']);
 });

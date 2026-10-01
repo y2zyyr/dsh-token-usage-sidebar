@@ -7,12 +7,15 @@
 // we never turn aggregate totals into synthetic invocation records.
 
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { UsageRecord, UsageSourceType } from '../types.ts';
 import { buildRecordsFromV1, type V1LedgerState } from './migration.ts';
+import { assertUsageRecord, isTokenCount } from '../validation.ts';
+import type { DurableStore } from './durableStore.ts';
+import { inTransaction } from './wrapper.ts';
 
-export const SOURCE_DISCOVERY_VERSION = 2;
+export const SOURCE_DISCOVERY_VERSION = 3;
 
 type JsonObject = Record<string, unknown>;
 type DiscoveryFormat = 'record-table' | 'legacy-root' | 'aggregate-summary';
@@ -27,6 +30,7 @@ export interface DiscoveredSource {
 }
 
 export interface SourceDiscoveryResult {
+  cached?: boolean;
   storageDir: string;
   status: 'complete' | 'partial' | 'failed' | 'none';
   records: UsageRecord[];
@@ -59,10 +63,9 @@ function finiteNumber(value: unknown): number | undefined {
 }
 
 function nonNegativeNumber(value: unknown, field: string, fallback = 0): number {
-  const parsed = finiteNumber(value);
-  if (parsed === undefined) return fallback;
-  if (parsed < 0) throw new Error(`${field} must be non-negative`);
-  return parsed;
+  if (value === undefined) return fallback;
+  if (!isTokenCount(value)) throw new Error(`${field} must be a non-negative safe integer`);
+  return value;
 }
 
 function text(value: unknown): string | undefined {
@@ -100,18 +103,20 @@ function normalizeRecord(raw: JsonObject, fallbackId: string, sourcePath: string
   if (id.length === 0) throw new Error('record id is empty');
   const identity = splitCanonicalId(id);
   const localDate = text(raw.localDate) ?? defaultDate ?? 'unclassified';
-  const timestamp = finiteNumber(raw.timestamp)
+  const timestamp = raw.timestamp === undefined ? undefined : nonNegativeNumber(raw.timestamp, 'timestamp');
+  const effectiveTimestamp = timestamp
     ?? (localDate !== 'unclassified' ? Date.parse(`${localDate}T12:00:00`) : 0);
   const totalTokens = nonNegativeNumber(raw.totalTokens, 'totalTokens');
-  const source = raw.source === 'assistant/chunk' ? 'assistant/chunk' : 'assistant/message';
+  if (!isTokenCount(raw.totalTokens)) throw new Error('totalTokens is missing or invalid');
+  const source = raw.source === 'assistant/chunk' || raw.source === 'assistant/attempt' ? raw.source : 'assistant/message';
   return {
     id,
     source,
     sessionId: text(raw.sessionId) ?? identity.sessionId,
-    turn: finiteNumber(raw.turn) === undefined ? identity.turn : Math.trunc(finiteNumber(raw.turn)!),
-    step: finiteNumber(raw.step) === undefined ? identity.step : Math.trunc(finiteNumber(raw.step)! ),
-    seq: finiteNumber(raw.seq) === undefined ? 0 : Math.trunc(finiteNumber(raw.seq)! ),
-    timestamp: timestamp !== undefined && Number.isFinite(timestamp) ? timestamp : 0,
+    turn: nonNegativeNumber(raw.turn, 'turn', identity.turn),
+    step: nonNegativeNumber(raw.step, 'step', identity.step),
+    seq: nonNegativeNumber(raw.seq, 'seq'),
+    timestamp: Number.isFinite(effectiveTimestamp) ? effectiveTimestamp! : 0,
     localDate,
     provider: text(raw.provider),
     model: text(raw.model),
@@ -122,6 +127,7 @@ function normalizeRecord(raw: JsonObject, fallbackId: string, sourcePath: string
     reasoningTokens: nonNegativeNumber(raw.reasoningTokens, 'reasoningTokens'),
     totalTokens,
     accounting: 'exact',
+    accountingVersion: raw.accountingVersion === undefined ? 1 : nonNegativeNumber(raw.accountingVersion, 'accountingVersion'),
     sourceType: sourceType(raw.sourceType, 'legacy_store'),
     sourcePath,
     migrationVersion: SOURCE_DISCOVERY_VERSION,
@@ -150,7 +156,7 @@ function readJson(path: string): { bytes: Buffer; value?: JsonObject; error?: st
     const value = JSON.parse(bytes.toString('utf8'));
     return isObject(value) ? { bytes, value } : { bytes, error: 'root is not an object' };
   } catch (error) {
-    return { bytes, error: `JSON parse failed: ${String(error)}` };
+    return { bytes, error: 'JSON parse failed' };
   }
 }
 
@@ -167,7 +173,9 @@ function parseRecordTable(table: JsonObject, sourcePath: string, defaultDate?: s
       continue;
     }
     try {
-      records.push(normalizeRecord(value, key, sourcePath, defaultDate));
+      const record = normalizeRecord(value, key, sourcePath, defaultDate);
+      assertUsageRecord(record);
+      records.push(record);
     } catch (error) {
       errors.push(`${sourcePath}: record ${key} invalid: ${String(error)}`);
     }
@@ -181,10 +189,52 @@ function parseLegacyRoot(root: JsonObject, sourcePath: string): { records: Usage
       ...record,
       sourcePath,
     }));
+    for (const record of records) assertUsageRecord(record);
+    if (!isTokenCount(root.lifetimeTotal ?? 0) || sumRecords(records) !== (root.lifetimeTotal ?? 0)
+      || !isTokenCount(root.recordCount ?? records.length) || (root.recordCount ?? records.length) !== records.length) throw new Error('legacy root totals mismatch');
     return { records, errors: [] };
   } catch (error) {
     return { records: [], errors: [`${sourcePath}: legacy root invalid: ${String(error)}`] };
   }
+}
+
+interface DiscoveryCache {
+  signature: string;
+  appliedGeneration: number;
+  result: SourceDiscoveryResult;
+}
+
+function sourceSignature(storageDir: string, options: SourceDiscoveryOptions): string | undefined {
+  try {
+    const files = readdirSync(storageDir).filter((name) => name.startsWith('dsh_token_usage') && name.endsWith('.json')).sort();
+    const fingerprint = files.map((name) => {
+      const stat = statSync(join(storageDir, name), { bigint: true });
+      return [name, stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String);
+    });
+    return hashOf(Buffer.from(JSON.stringify([SOURCE_DISCOVERY_VERSION, !!options.includeLegacyRoot, fingerprint])));
+  } catch { return undefined; }
+}
+
+/** Cache only successful, committed imports. File changes and failed scans are rechecked. */
+export function importTokenSources(store: DurableStore, storageDir: string, options: SourceDiscoveryOptions = {}): { discovery: SourceDiscoveryResult; applied: number } {
+  const signature = sourceSignature(storageDir, options);
+  const cached = store.readSourceDiscoveryCache<DiscoveryCache>();
+  if (signature && !store.repairedOnOpen && cached?.signature === signature
+    && isTokenCount(cached.appliedGeneration) && cached.appliedGeneration <= (store.readMeta()?.recordGeneration ?? 0)
+    && (cached.result?.status === 'complete' || cached.result?.status === 'none')
+    && Array.isArray(cached.result.sources) && Array.isArray(cached.result.errors) && cached.result.aggregateChecks) {
+    return { discovery: { ...cached.result, records: [], cached: true }, applied: 0 };
+  }
+  const discovery = discoverTokenSources(storageDir, options);
+  const applied = inTransaction(store.database, () => {
+    const result = store.apply(discovery.records);
+    if (signature && signature === sourceSignature(storageDir, options) && (discovery.status === 'complete' || discovery.status === 'none')) {
+      store.writeSourceDiscoveryCache({ signature, appliedGeneration: store.readMeta()?.recordGeneration ?? 0,
+        result: { ...discovery, records: [] } } satisfies DiscoveryCache);
+    }
+    return result.added + result.replaced;
+  });
+  return { discovery, applied };
 }
 
 function bestRecords(records: readonly UsageRecord[], errors: string[]): UsageRecord[] {

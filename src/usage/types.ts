@@ -12,13 +12,16 @@ export type LocalDate = string;
  * `${sessionId}:${turn}:${step}` -- the same (turn, step) sample may be reported
  * first as an early stream sample (assistant/chunk.usage) and later replaced by
  * the final committed message (assistant/message.usage). Exactly one number per
- * (session, turn, step) contributes to Lifetime/Total.
+ * (session, turn, step) contributes to Lifetime/Total in accounting v1.
+ * Accounting v2 preserves that id for the first attempt and uses
+ * `${sessionId}:${turn}:${step}:retry:${retryStartedSeq}` for explicit retries.
+ * Repeated usage samples inside one attempt still replace, never add.
  */
 export interface UsageRecord {
   /** Deterministic dedup identity. */
   readonly id: string;
   /** Source event type. */
-  readonly source: 'assistant/message' | 'assistant/chunk';
+  readonly source: 'assistant/message' | 'assistant/chunk' | 'assistant/attempt';
   readonly sessionId: string;
   readonly turn: number;
   readonly step: number;
@@ -45,6 +48,8 @@ export interface UsageRecord {
   readonly sourcePath?: string;
   /** v0.2 provenance: migration/format version. */
   readonly migrationVersion?: number;
+  /** Version of the dedup/accounting contract; absent means legacy v1. */
+  readonly accountingVersion?: number;
 }
 
 /** Disjoint token buckets from a provider TokenUsage. */

@@ -17,6 +17,9 @@ Total       …
 
 This is a community plugin, not an official DeepSeek plugin.
 
+The working tree includes **unreleased reliability fixes** documented in
+[CHANGELOG.md](CHANGELOG.md#unreleased). The published release remains v1.1.8.
+
 ## Features
 
 - Sidebar summary: Today, Yesterday, and lifetime Total.
@@ -34,16 +37,17 @@ This is a community plugin, not an official DeepSeek plugin.
   plugin-owned SQLite database (Node's built-in `node:sqlite`, WAL journal) instead
   of a monolithic JSON root. A new invocation is one small row-level upsert, so write
   latency stays effectively flat no matter how many historical records accumulate.
-- **Automatic verified migration (v1.1).** Existing v1.0.1 totals are migrated into the
-  new ledger automatically, verified for exact equivalence (lifetime total, record
-  count, per-day and provider/model), and only then cut over. No totals are lost or
-  double-counted, and a backup of the v1 ledger is made before cutover.
-- Shutdown-safe persistence: dirty usage is flushed before the store closes, so
-  a usage event followed by a quick DSH restart is not lost.
+- **Automatic verified migration.** Legacy JSON records are imported and verified
+  transactionally, retaining unrelated or newer SQLite records. The source is backed
+  up before cutover; a failed migration restores the previous SQLite state.
+- Each usage batch commits its records and aggregate updates before returning.
 - Historical recovery from available authoritative session usage records, with
   honest scan/coverage reporting (a partial or failed scan never claims complete
   lifetime coverage).
-- Replay-safe, deduplicated accounting: an invocation is counted once.
+- Replay-safe accounting: each provider attempt is counted once; explicit retries
+  contribute their own reported usage, and forks exclude inherited events.
+- Visible recovery, partial-history, and stale-data states; failures do not silently
+  replace known totals with zero.
 - Native placement in the DSH web sidebar.
 
 ![Token Usage settings page](docs/screenshots/token-usage-settings-en-v1.1.5.png)
@@ -132,9 +136,16 @@ persistent local accounting
 sidebar summary
 ```
 
-The plugin uses provider/runtime-reported usage records rather than tokenizer estimates. Total is `input + cache read + cache write + output`; **Reasoning** is displayed as an output subdivision and is never added to Total a second time. It uses the final committed assistant message's `message.source.provider` and `message.source.model` when available.
+The plugin uses provider/runtime-reported usage records rather than tokenizer estimates. Total is `input + cache read + cache write + output`; **Reasoning** is displayed as an output subdivision and is never added to Total a second time. It reads `assistant/message` and `assistant/attempt`, including the last usage chunk in their stream when direct usage is absent, and supports older standalone usage chunks. Provider/model labels come from `message.source` when available; missing labels remain unknown.
 
-All day-based ranges use the DSH host's local calendar days. Last 7 days includes today plus the previous six local days. The settings page receives aggregate results only; it never receives the individual invocation ledger.
+Accounting version 2 keeps `sessionId:turn:step` for the first attempt and appends
+`:retry:<retry-started-seq>` for an explicit retry. A later usage sample replaces
+the earlier sample within that attempt. Failed attempts with reported usage still
+count; inherited fork history remains owned by the parent. Existing version 1 rows
+are corrected only after a complete source replay, with a SQLite backup and a local
+before/after audit. See [the accounting migration](docs/migrations/accounting-v2.md).
+
+All day-based ranges use the DSH host's local calendar days. Last 7 days includes today plus the previous six local days, including empty days. A daily total already includes its dated unclassified tokens; they are not added twice. The settings page receives aggregate results only; it never receives the individual invocation ledger.
 
 ### Provider and model filtering
 
@@ -147,17 +158,32 @@ The plugin also performs a narrow automatic discovery pass in the DSH
 partitioned day ledgers from earlier local builds, and imports their invocation
 details by the canonical `sessionId:turn:step` identity. Aggregate-only
 summaries are used for verification and are never imported as extra calls.
-Discovery is read-only against its sources and idempotent across restarts; it
-does not scan the general filesystem or require a manually configured path.
+Discovery is read-only against its sources and idempotent across restarts. Successful
+imports reuse a cache only while the candidate filenames, file identities, sizes, and
+modification/change timestamps match. Changed files and failed scans are rechecked.
+It does not scan the general filesystem or require a manually configured path.
 
-v1.0.0/v1.0.1 performs one idempotent replay of recoverable persistent DSH session events to enrich existing calls with their exact buckets and model metadata. A previously recorded call is only enriched, or replaced by a higher-sequence final message: it is not added to lifetime usage again.
+The host reads persisted sessions through the official `sessionPersistence` service,
+including sessions that have never been opened in the current process. DSH 0.1 prefers
+`listSnapshots` (falling back to `list`) and reads through `readFrom`; DSH 0.2 uses
+read-only `open`/`read` handles that are always closed. Matching official revision
+tokens skip unchanged logs entirely. Changed logs verify the checkpoint boundary
+before folding their suffix; fresh legacy imports and aggregate repairs force full
+replay. Some JSONL backends still parse the whole physical log when a read is needed.
+Live listeners are registered before asynchronous recovery.
 
 Some legacy calls may have a reliable All time total but no recoverable date, bucket, provider, or model. Those tokens remain included in All time and are explicitly shown as **unclassified coverage**. They are never invented into a date or model row.
 
-**History reporting is honest (v1.0.1).** The plugin keeps two distinct signals:
+**History reporting.** The API keeps two distinct signals in `health`:
 
-- **Source scan status** — whether every session the plugin could enumerate was read successfully (complete / partial / failed / unknown). Any session that fails to read downgrades the scan to partial; it can never claim complete.
-- **Historical coverage** — whether we can assert that the recovered records represent the plugin's full lifetime history (complete / partial / unknown). Because enumerating today's session logs does not prove there are no older, deleted, or out-of-window sessions, coverage almost always remains partial (or unknown when nothing is recoverable). The plugin never labels a scan as complete simply because some sessions were found.
+- **Source scan status** — whether enumerated sessions were read successfully (`complete`, `partial`, `failed`, or `unknown`). A failed read prevents a complete scan.
+- **Historical coverage** — `partial` when records exist, otherwise `unknown`. Enumerating available logs cannot prove that older or deleted sessions are recoverable, so this is never promoted to complete.
+
+During initialization or a failed migration, summary/details return HTTP 503 with
+an error and `health`, rather than a successful zero. With a readable existing ledger,
+a partial source scan can still return known totals with a warning. The browser
+shows its last successful update on a failed refresh, rejects obsolete responses,
+and does not relabel an earlier range's numbers as the newly selected range.
 
 **Total's meaning:** Lifetime **Total** is the deduplicated union of every authoritative usage record the plugin recovered from durable sources plus usage recorded after tracking began — it reflects what the plugin can recover, not a claim about the DSH account's full lifetime usage when not all history is provably recoverable.
 
@@ -170,10 +196,11 @@ On first startup after upgrading to v1.1, the plugin detects the v1.0.1 JSON led
    file in the same data directory.
 3. **Creates/opens** the v1.1 SQLite ledger and inserts the canonical records.
 4. **Derives** all aggregate tables (global, daily, provider/model) from the records.
-5. **Verifies** exact accounting equivalence (lifetime total, record count, and
-   `sum(records) == global`).
+5. **Verifies** the source total/count, the imported record union, provenance, and
+   every global, daily, model, and day/model aggregate field. Existing unrelated or
+   newer records remain part of the destination total.
 6. **Cutover** — only if verification passes. Any mismatch marks the migration
-   **failed**, no cutover happens, and the v1 source is left untouched.
+   **failed**, all transactional changes roll back, and the v1 source is left untouched.
 
 The migration is **idempotent**: a completed migration is a no-op on later restarts,
 and no records are duplicated. New usage recorded after cutover is exactly-once.
@@ -194,13 +221,17 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
   companions. The exact path respects the `DSH_HOME` environment variable when set.
   It is never the source repo or the package install directory, so it survives
   upgrades, re-installs, and restarts.
-- **No conversation contents.** The DB holds only deduplication ids (`sessionId:turn:step`),
+- **No conversation contents.** The DB holds only deduplication ids (including retry suffixes),
   token bucket totals, provider/model labels, local dates, and accounting metadata.
   It never stores prompts, assistant text, tool output, API keys, credentials, or
   conversation content.
-- **Legacy alias compatibility.** If an older release created provider-alias rows, they remain in the plugin-owned database during upgrade; the current UI does not ask users to maintain a second provider-name mapping, and accounting records are never deleted or rewritten.
+- **Legacy alias compatibility.** Older provider-alias rows remain in the database; alias configuration does not rewrite accounting records.
 - **Upgrade backup.** Before cutover the v1.0.1 JSON ledger is copied to a timestamped
   `.pre-v1.1-<timestamp>.bak` file in the same directory. The v1 source is never deleted.
+- **Accounting correction backup.** Before correcting legacy retry/fork accounting,
+  the plugin creates an immutable `.pre-accounting-v2-<id>.bak` SQLite snapshot and
+  retains prior numeric record metadata in `accounting_changes`. Inherited rows are
+  excluded from totals rather than deleted. Unverifiable legacy rows remain counted.
 - **Uninstall.** Removing the plugin does not delete this data.
 - **Downgrade to v1.0.1.** The v1.1 SQLite ledger is not read by v1.0.1. To return to
   v1.0.1, restore the pre-upgrade v1 JSON backup (or the untouched v1 source) after
@@ -217,22 +248,27 @@ requires `@deepseek-ai/dsh-storage-domain`, which this plugin does not use, and 
 Cordis `4.0.x`. Runtime behavior has not been separately smoke-tested on DSH
 `0.2.0-rc.2`; `node:sqlite` remains required.
 
+The unreleased changes require the official `sessionPersistence` host service. Their
+DSH 0.1/0.2 adapters, actual host routes, and React components have automated fixture
+coverage; a real DSH boot and manual UI smoke test remain unverified for these changes.
+
 ### Reliability guarantees (v1.1)
 
 - **Flat write latency.** A new invocation is one small row-level SQLite upsert in WAL
   mode, independent of lifetime history size. Summary reads come from maintained
   aggregate tables, not a scan of the full record set.
-- **Exactly-once accounting.** Canonical identity is `sessionId:turn:step`; the final
-  committed `assistant/message.usage` supersedes an earlier `assistant/chunk` sample, and
-  replays/duplicates never double-count (higher-seq wins).
+- **Exactly-once accounting.** Each attempt has a stable identity and keeps its
+  highest-sequence usage sample. Explicit retries are separate attempts; duplicates
+  do not add another call.
 - **Source of truth = records.** `usage_records` is authoritative; aggregate tables are a
-  derived, rebuildable cache. If an aggregate drifts, it is rebuilt from records.
-- **Verified migration.** v1.0.1 totals are migrated and verified for exact equivalence
-  before cutover; a mismatch fails closed and keeps the v1 source intact.
+  derived, rebuildable cache. Startup verifies all aggregate fields and repairs drift
+  from valid records; invalid authoritative records stop initialization.
+- **Verified migration.** Legacy records are verified as a union with existing
+  SQLite history before cutover; a mismatch rolls back and preserves both sources.
 - **Crash-safe migration.** The v1 source is only ever read/copied; a partial or failed
   migration never leaves unverified records visible and resumes cleanly.
-- **No lost writes on shutdown.** Dirty usage is flushed and the SQLite ledger is
-  committed/checkpointed before the store closes.
+- **Shutdown.** Committed batches are already durable before shutdown. Disposal
+  cancels recovery, unregisters listeners/routes, and closes owned handles.
 
 ### Reliability guarantees (v1.0.1)
 
@@ -247,14 +283,18 @@ Cordis `4.0.x`. Runtime behavior has not been separately smoke-tested on DSH
 npm install
 npm test
 npm run build
-npx tsc --noEmit   # typecheck (v1.1 adds this gate)
+npm run typecheck
+npm run check:package
 ```
 
-`npm test` runs the accounting, historical-recovery, insights, durable SQLite, migration,
-and property/equivalence tests. `npm run build` writes the shipped host and browser
-bundles to `lib/` and keeps the root-compatibility `client.js` byte-aligned. GitHub
-Actions CI (`.github/workflows/ci.yml`) runs `npm ci`, `npm test`, `npm run build`, and
-a `git diff --exit-code` so committed artifacts must always match source.
+`npm test` includes accounting, recovery, integrity, migration, actual host-route,
+React DOM, and property/equivalence tests using synthetic data. Type checking covers
+both TS and TSX. Build emits real declaration files and keeps both client bundles
+byte-aligned. `check:package` audits a temporary npm archive, imports its host, and
+checks consumer types under NodeNext and Bundler resolution without requiring React
+types for the public loader contract. CI runs these gates on Node 22/24 and requires
+committed generated artifacts to match source. Use Node ≥22.19 or a current 24+ release
+for development (built-in TypeScript stripping and the zstd fixtures are required).
 
 ## License
 

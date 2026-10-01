@@ -10,8 +10,7 @@ jobs:
     name: test & build (reproducible artifacts)
     runs-on: ubuntu-latest
     strategy:
-      # src uses node:zlib zstdCompressSync (added Node 22.5), so 22 is the
-      # effective minimum; 24 is the current LTS we also verify against.
+      # Legacy recovery fixtures use zstdCompressSync (Node >= 22.15).
       matrix:
         node: [ '22', '24' ]
     steps:
@@ -22,7 +21,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: npm run typecheck
       - run: npm run build
+      - run: npm run check:package
       # Release blocker: committed generated artifacts must match this build.
       - name: Assert generated artifacts match source
         run: git diff --exit-code

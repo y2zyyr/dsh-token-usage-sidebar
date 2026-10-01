@@ -97,7 +97,7 @@
         <article class="feature-card"><span class="feature-icon">↯</span><h3>Automatic history discovery</h3><p>Finds available plugin-owned token records in DSH storage without asking you to maintain a path or duplicate configuration.</p></article>
         <article class="feature-card"><span class="feature-icon">▦</span><h3>Compact settings</h3><p>Range tabs, filters, metrics, provider/model rows, and recent local days stay readable in a smaller settings surface.</p></article>
         <article class="feature-card"><span class="feature-icon">◫</span><h3>Durable local ledger</h3><p>A plugin-owned SQLite ledger with WAL mode keeps persistent accounting fast and survives DSH restarts and upgrades.</p></article>
-        <article class="feature-card"><span class="feature-icon">✓</span><h3>Exactly-once accounting</h3><p>Canonical invocation identities and replay-safe updates prevent retries and duplicate events from inflating totals.</p></article>
+        <article class="feature-card"><span class="feature-icon">✓</span><h3>Exactly-once accounting</h3><p>Each provider attempt keeps its own reported usage. Duplicate delivery and replay do not add another call; explicit retries count their actual usage.</p></article>
         <article class="feature-card"><span class="feature-icon">⌁</span><h3>Accurate provider names</h3><p>Filters use the exact provider and model names reported by DSH. There is no second provider-name form to fill in.</p></article>
         <article class="feature-card"><span class="feature-icon">◉</span><h3>Private by default</h3><p>Usage metadata remains on your machine. The ledger does not store prompts, assistant text, tool output, credentials, or API keys.</p></article>
       </div>
@@ -112,7 +112,7 @@
         </div>
         <ol class="steps">
           <li><span>01</span><div><strong>Collect</strong><p>Read committed DSH/provider usage records from live events and available local history.</p></div></li>
-          <li><span>02</span><div><strong>Deduplicate</strong><p>Use the canonical session, turn, and step identity so replays are counted once.</p></div></li>
+          <li><span>02</span><div><strong>Deduplicate</strong><p>Use session, turn, step and explicit retry boundaries so each attempt is counted once; forks exclude inherited history.</p></div></li>
           <li><span>03</span><div><strong>Persist</strong><p>Store accounting metadata in the plugin-owned local SQLite ledger.</p></div></li>
           <li><span>04</span><div><strong>Present</strong><p>Show totals, buckets, filters, provider/model detail, and recent local calendar days.</p></div></li>
         </ol>

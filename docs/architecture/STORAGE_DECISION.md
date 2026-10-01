@@ -1,6 +1,6 @@
 # dsh-token-usage-sidebar — v1.1.0 Storage Architecture Decision
 
-Status: ACCEPTED for v1.1.0
+Status: ACCEPTED for v1.1.0; unreleased integrity/query update after v1.1.8
 Date: 2026-08-16
 
 ## Problem
@@ -30,7 +30,7 @@ per write; no key design removes the whole-file rewrite.
      transactional guarantee (DSH JSON offers no multi-row transaction).
   5. **Migration complexity.** Indexing/routing existing records into shards adds
      migration machinery that the row-store approach avoids entirely.
-  In short, per-day JSON performs the same whole-file rewrite and adds routing and
+Per-day JSON performs the same whole-file rewrite and adds routing and
   consistency complexity, while still degrading within a single hot day. It was
   therefore rejected.
 - C) plugin-owned SQLite via node:sqlite (WAL): row-level writes touch only changed
@@ -43,21 +43,52 @@ rows -> single upsert / total SUM / day SUM
 50k   -> 0.002ms / 1.90ms / 3.02ms
 100k  -> 0.003ms / 4.34ms / 6.55ms
 500k  -> 0.002ms / 19.26ms / 33.17ms
-Single invocation upsert is ~2-3us and FLAT from 1k -> 500k rows => ONE_NEW_INVOCATION ~= ONE_SMALL_DURABLE_UPSERT.
+These original measurements are a small SQLite POC, not end-to-end plugin timings.
+They show row-level storage avoiding the whole-JSON rewrite.
+
+## Unreleased end-to-end/query verification
+
+Synthetic Node 26.4 measurements for the repaired durable path:
+
+| Data size | Store single write | Aggregator single write | Summary |
+| --- | ---: | ---: | ---: |
+| 1k usage records | 0.126 ms | 0.092 ms | 0.012 ms |
+| 100k usage records | 0.085 ms | 0.083 ms | 0.010 ms |
+
+With 100k date/model aggregate rows, a seven-local-day query went from 244.57 ms
+in v1.1.8 to 2.25 ms in the repaired path. It performs zero full day/model reads;
+EXPLAIN confirms a date-range index search. The fixture uses 200 models per day,
+so the selected range contains at most 1,400 rows. These are local synthetic results,
+not hardware-independent latency guarantees.
 
 ## Chosen model
-- usage_records = authoritative source of truth (canonical_id PK = sessionId:turn:step).
+- usage_records = authoritative source of truth (canonical_id PK identifies an attempt;
+  the first keeps sessionId:turn:step and explicit retries append a boundary-seq suffix).
 - aggregate_global / aggregate_daily / aggregate_model / aggregate_day_model = derived rebuildable cache.
 - meta: storage_schema_version, migration_version, record_generation, aggregate_generation, migration_status.
 - Every record batch commits records + aggregate deltas in ONE transaction (subtract-old, add-new).
-- rebuildAggregates() re-derives from records (repair / migration verify / diagnostics) — not normal startup.
+- Startup verifies all record-derived aggregate fields/provenance, with a rebuild only
+  on drift. Invalid authoritative records prevent initialization. First verification
+  remains O(history), while normal summary/write paths avoid full-record scans.
+- Indexed date constraints avoid full day/model materialization for short ranges.
+- Successful JSON imports, official source revisions and persisted session checkpoints
+  avoid unchanged parsing/refolding. Changed JSONL reads may still scan the physical
+  artifact internally. Legacy imports and repairs invalidate session checkpoints.
+- Schema 3 adds accounting version/exclusions, numeric correction audits, session
+  checkpoints, and successful source-discovery cache metadata.
 - Records retained indefinitely (no auto-delete).
 
 ## Migration strategy
 detect v1 -> read-only validate -> backup (timestamped, immutable) -> create DB ->
 insert canonical records (upsert) -> rebuild aggregates -> verify (lifetimeTotal, recordCount,
-sum(records)==global) -> commit migration_status='done' -> switch reads. Any verify FAIL => status='failed',
-v1 source untouched, no cut over. Idempotent (done short-circuits); crash-safe (v1 only read; partial DB re-migrated).
+the imported union and every aggregate field) -> commit migration_status='done' -> switch reads.
+Existing unrelated/newer destination records are retained. Any verification failure
+rolls back rows, aggregates and transaction metadata before setting status='failed';
+the v1 source stays untouched. Idempotent and process-crash safe.
+
+Accounting v2 correction separately requires a complete source replay, an immutable
+SQLite backup and a transactional before/after audit. Inherited fork rows are excluded
+rather than deleted. See [the accounting migration](../migrations/accounting-v2.md).
 
 ## node:sqlite feasibility across matrix
 Node 22.13.0 / 22.19.0 / 24.0.0 import node:sqlite + CRUD + WAL + tx without a flag

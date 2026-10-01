@@ -1,5 +1,6 @@
 // scripts/build.mjs
 import { build } from 'esbuild';
+import ts from 'typescript';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -82,10 +83,24 @@ ${body}
   // root. Keep that compatibility artifact byte-for-byte aligned with lib/.
   writeFileSync(join(root, 'client.js'), wrapped);
 
-  mkdirSync(join(root, 'lib', 'types'), { recursive: true });
-  mkdirSync(join(root, 'lib', 'types', 'client'), { recursive: true });
-  writeFileSync(join(root, 'lib', 'types', 'index.d.ts'), `export * from '../../src/index';`);
-  writeFileSync(join(root, 'lib', 'types', 'client', 'index.d.ts'), `export * from '../../../src/client/index';`);
+  // esbuild strips types; TypeScript emits self-contained declarations.
+  const config = ts.readConfigFile(join(root, 'tsconfig.json'), ts.sys.readFile);
+  if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, '\n'));
+  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
+  const program = ts.createProgram(parsed.fileNames, {
+    ...parsed.options, noEmit: false, declaration: true, emitDeclarationOnly: true,
+    noEmitOnError: true, rootDir: join(root, 'src'), outDir: join(root, 'lib', 'types'),
+  });
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  if (diagnostics.length > 0) throw new Error(ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+    getCanonicalFileName: (name) => name, getCurrentDirectory: () => root, getNewLine: () => '\n',
+  }));
+  const emitted = program.emit(undefined, (path, text) => {
+    // Published NodeNext declarations resolve sibling .d.ts files via .js.
+    const normalized = text.replace(/(from\s+['"][^'"]+|import\(['"][^'"]+)\.tsx?(['"])/g, '$1.js$2');
+    mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, normalized);
+  });
+  if (emitted.emitSkipped) throw new Error('[build] declaration emission failed');
 
   console.log('[build] host ->', join(root, 'lib', 'index.js'));
   console.log('[build] client ->', join(root, 'lib', 'client.js'), '(' + Buffer.byteLength(wrapped) + ' bytes)');

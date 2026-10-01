@@ -41,7 +41,7 @@ function datesForRange(range: InsightRange, now: number): string[] | undefined {
 interface ModelLike { provider: string; model: string; total_tokens: number; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number; reasoning_tokens: number; calls: number; }
 interface DayModelLike extends ModelLike { local_date: string; }
 
-function metricsOf(g: Partial<GlobalAggRow>): Metrics { return { totalTokens: g.total_tokens ?? 0, inputTokens: g.input_tokens ?? 0, outputTokens: g.output_tokens ?? 0, cacheReadTokens: g.cache_read_tokens ?? 0, cacheWriteTokens: g.cache_write_tokens ?? 0, reasoningTokens: g.reasoning_tokens ?? 0, callCount: g.calls ?? 0 }; }
+function metricsOf(g: Partial<GlobalAggRow>): Metrics { return { totalTokens: (g.total_tokens ?? 0) - (g.unknown_tokens ?? 0), inputTokens: g.input_tokens ?? 0, outputTokens: g.output_tokens ?? 0, cacheReadTokens: g.cache_read_tokens ?? 0, cacheWriteTokens: g.cache_write_tokens ?? 0, reasoningTokens: g.reasoning_tokens ?? 0, callCount: g.calls ?? 0 }; }
 function metricsOfModel(row: ModelLike): Metrics { return { totalTokens: row.total_tokens, inputTokens: row.input_tokens, outputTokens: row.output_tokens, cacheReadTokens: row.cache_read_tokens, cacheWriteTokens: row.cache_write_tokens, reasoningTokens: row.reasoning_tokens, callCount: row.calls }; }
 function addMetrics(target: Metrics, source: Metrics): void {
   target.totalTokens += source.totalTokens;
@@ -58,7 +58,7 @@ function sumModelMetrics(rows: readonly ModelLike[]): Metrics {
   return out;
 }
 function sumCategories(rows: readonly DailyAggRow[]): Metrics {
-  return rows.reduce<Metrics>((acc, d) => ({ totalTokens: acc.totalTokens + d.total_tokens, inputTokens: acc.inputTokens + d.input_tokens, outputTokens: acc.outputTokens + d.output_tokens, cacheReadTokens: acc.cacheReadTokens + d.cache_read_tokens, cacheWriteTokens: acc.cacheWriteTokens + d.cache_write_tokens, reasoningTokens: acc.reasoningTokens + d.reasoning_tokens, callCount: acc.callCount + d.calls }), emptyMetrics());
+  return rows.reduce<Metrics>((acc, d) => ({ totalTokens: acc.totalTokens + d.total_tokens - (d.unknown_tokens ?? 0), inputTokens: acc.inputTokens + d.input_tokens, outputTokens: acc.outputTokens + d.output_tokens, cacheReadTokens: acc.cacheReadTokens + d.cache_read_tokens, cacheWriteTokens: acc.cacheWriteTokens + d.cache_write_tokens, reasoningTokens: acc.reasoningTokens + d.reasoning_tokens, callCount: acc.callCount + d.calls }), emptyMetrics());
 }
 function dailyToDetails(rows: readonly DailyAggRow[]): DailyDetails[] {
   return rows.map((d) => ({ date: d.local_date, totalTokens: d.total_tokens, inputTokens: d.input_tokens, outputTokens: d.output_tokens, cacheReadTokens: d.cache_read_tokens, cacheWriteTokens: d.cache_write_tokens, reasoningTokens: d.reasoning_tokens, callCount: d.calls, unknownTokens: d.unknown_tokens ?? 0 }));
@@ -147,52 +147,35 @@ function normalizedFilters(input: UsageFilters | undefined, groups: readonly Pro
   return { filters, providerValues: selectedProviderValues(provider, groups), group, active: provider !== null || model !== null };
 }
 
-function rangeModelRows(store: DurableStore, range: InsightRange, now: number): ModelLike[] {
-  if (range === 'all') return store.modelTotals();
-  const dates = datesForRange(range, now)!;
-  const selected = new Set(dates);
-  if (range === '7d') return store.dayModelTotals().filter((row) => selected.has(row.local_date));
-  return store.dayModelTotals(dates[0]);
-}
-
-function rangeDayModelRows(store: DurableStore, range: InsightRange, now: number): DayModelLike[] {
-  if (range === 'all') return store.dayModelTotals();
-  const dates = datesForRange(range, now)!;
-  const selected = new Set(dates);
-  return store.dayModelTotals().filter((row) => selected.has(row.local_date));
-}
-
-function unknownForRange(store: DurableStore, range: InsightRange, now: number): ExcludedUnclassified {
-  if (range === 'all') {
-    const global = store.globalAggregate();
-    return { tokens: global?.unknown_tokens ?? 0, calls: global?.unknown_calls ?? 0 };
-  }
-  const selected = new Set(datesForRange(range, now));
-  return store.dailyTotals().filter((row) => selected.has(row.local_date)).reduce<ExcludedUnclassified>((out, row) => ({ tokens: out.tokens + (row.unknown_tokens ?? 0), calls: out.calls + (row.unknown_calls ?? 0) }), { tokens: 0, calls: 0 });
-}
-
 export class DurableAggregator {
   private store: DurableStore; private now: () => number; private listeners = new Set<(s: SummaryValue) => void>(); private closed = false;
   constructor(store: DurableStore, opts: { now?: () => number } = {}) { this.store = store; this.now = opts.now ?? (() => Date.now()); }
   summary(): SummaryValue {
     const now = this.now(); const global = this.store.globalAggregate(); const todayDate = localDate(now); const yesterdayDate = datesEnding(now, 2)[0];
     const today = this.store.daily(todayDate); const yesterday = this.store.daily(yesterdayDate);
-    return { todayTotal: today?.total_tokens ?? 0, todayDate, yesterdayTotal: yesterday?.total_tokens ?? 0, yesterdayDate, lifetimeTotal: global?.total_tokens ?? 0, recordCount: this.store.recordCount(), serverNow: todayDate };
+    return { todayTotal: today?.total_tokens ?? 0, todayDate, yesterdayTotal: yesterday?.total_tokens ?? 0, yesterdayDate, lifetimeTotal: global?.total_tokens ?? 0, recordCount: (global?.calls ?? 0) + (global?.unknown_calls ?? 0), serverNow: todayDate };
   }
   insights(range: InsightRange, inputFilters: UsageFilters = {}): DetailsValue {
     const now = this.now();
     const groups = this.store.listProviderAliasGroups();
     const parsed = normalizedFilters(inputFilters, groups);
     const rangeDates = datesForRange(range, now);
-    const rawModels = rangeModelRows(this.store, range, now);
+    const start = rangeDates?.[0], end = rangeDates?.[rangeDates.length - 1];
+    // Read each range once. The SQLite primary key begins with local_date.
+    const dayModels = rangeDates || parsed.active ? this.store.dayModelTotals(start, end) : [];
+    const rawModels = rangeDates ? mergeDayModelRows(dayModels) : this.store.modelTotals();
+    const dailyRows = this.store.dailyTotals(start, end);
     const facets = buildFacets(rawModels, groups);
 
     if (parsed.active) {
       const matches = (row: ModelLike) => (parsed.providerValues === undefined || parsed.providerValues.includes(row.provider)) && (parsed.filters.model === null || row.model === parsed.filters.model);
       const selectedModels = rawModels.filter(matches);
       const categories = sumModelMetrics(selectedModels);
-      const selectedDaily = rangeDayModelRows(this.store, range, now).filter(matches);
-      const excludedUnclassified = unknownForRange(this.store, range, now);
+      const selectedDaily = dayModels.filter(matches);
+      const global = range === 'all' ? this.store.globalAggregate() : undefined;
+      const excludedUnclassified = range === 'all'
+        ? { tokens: global?.unknown_tokens ?? 0, calls: global?.unknown_calls ?? 0 }
+        : dailyRows.reduce<ExcludedUnclassified>((out, row) => ({ tokens: out.tokens + row.unknown_tokens, calls: out.calls + row.unknown_calls }), { tokens: 0, calls: 0 });
       return {
         range,
         ...(rangeDates ? { rangeStartDate: rangeDates[0], rangeEndDate: rangeDates[rangeDates.length - 1] } : {}),
@@ -208,27 +191,28 @@ export class DurableAggregator {
       };
     }
 
-    if (range === 'all') {
-      const global = this.store.globalAggregate() ?? ({} as GlobalAggRow);
-      return { range, totalTokens: global.total_tokens ?? 0, categories: metricsOf(global), unknownTokens: global.unknown_tokens ?? 0, unknownCallCount: global.unknown_calls ?? 0, daily: dailyToDetails(this.store.dailyTotals()), models: modelDetailsOf(this.store.modelTotals()), filters: parsed.filters, facets, excludedUnclassified: { tokens: 0, calls: 0 } };
-    }
-    if (range === '7d') {
-      const dates = rangeDates!; const selected = new Set(dates); const allDaily = this.store.dailyTotals();
-      const selectedDaily = allDaily.filter((d) => selected.has(d.local_date)).sort((a, b) => a.local_date < b.local_date ? -1 : 1);
-      const dayModels = this.store.dayModelTotals().filter((m) => selected.has(m.local_date));
-      return { range, rangeStartDate: dates[0], rangeEndDate: dates[dates.length - 1], totalTokens: selectedDaily.reduce((a, d) => a + d.total_tokens, 0), categories: sumCategories(selectedDaily), unknownTokens: selectedDaily.reduce((a, d) => a + (d.unknown_tokens ?? 0), 0), unknownCallCount: selectedDaily.reduce((a, d) => a + (d.unknown_calls ?? 0), 0), daily: dailyToDetails(selectedDaily), models: modelDetailsOf(mergeDayModelRows(dayModels)), filters: parsed.filters, facets, excludedUnclassified: { tokens: 0, calls: 0 } };
-    }
-    const target = rangeDates![0];
-    const day = this.store.daily(target) ?? ({} as DailyAggRow); const dayModels = this.store.dayModelTotals(target);
-    return { range, ...(range === 'yesterday' ? { rangeStartDate: target, rangeEndDate: target } : {}), totalTokens: day.total_tokens ?? 0, categories: { totalTokens: day.total_tokens ?? 0, inputTokens: day.input_tokens ?? 0, outputTokens: day.output_tokens ?? 0, cacheReadTokens: day.cache_read_tokens ?? 0, cacheWriteTokens: day.cache_write_tokens ?? 0, reasoningTokens: day.reasoning_tokens ?? 0, callCount: day.calls ?? 0 }, unknownTokens: day.unknown_tokens ?? 0, unknownCallCount: day.unknown_calls ?? 0, daily: dailyToDetails(this.store.dailyTotals()), models: modelDetailsOf(dayModels), filters: parsed.filters, facets, excludedUnclassified: { tokens: 0, calls: 0 } };
+    const global = this.store.globalAggregate() ?? ({} as GlobalAggRow);
+    const categories = range === 'all' ? metricsOf(global) : sumCategories(dailyRows);
+    const unknownTokens = range === 'all' ? global.unknown_tokens ?? 0 : dailyRows.reduce((sum, row) => sum + row.unknown_tokens, 0);
+    const unknownCallCount = range === 'all' ? global.unknown_calls ?? 0 : dailyRows.reduce((sum, row) => sum + row.unknown_calls, 0);
+    const byDate = new Map(dailyToDetails(dailyRows).map((row) => [row.date, row]));
+    const daily = rangeDates
+      ? rangeDates.map((date) => byDate.get(date) ?? { date, ...emptyMetrics(), unknownTokens: 0 })
+      : [...byDate.values()];
+    return {
+      range, ...(rangeDates ? { rangeStartDate: start, rangeEndDate: end } : {}),
+      totalTokens: categories.totalTokens + unknownTokens, categories, unknownTokens, unknownCallCount,
+      daily, models: modelDetailsOf(rawModels), filters: parsed.filters, facets,
+      excludedUnclassified: { tokens: 0, calls: 0 },
+    };
   }
   apply(records: readonly UsageRecord[]): number { if (this.closed) return 0; const o = this.store.apply(records); if (o.added + o.replaced > 0) this.notify(); return o.added + o.replaced; }
   get ready(): boolean { return !this.closed; }
   rebuildAggregates(): void { this.store.rebuildAggregates(); }
   verifyAggregates() { return this.store.verifyAggregates(); }
   subscribe(l: (s: SummaryValue) => void): () => void { this.listeners.add(l); try { l(this.summary()); } catch {} return () => { this.listeners.delete(l); }; }
-  private notify(): void { const s = this.summary(); for (const l of [...this.listeners]) { try { l(s); } catch {} } }
-  diagnostics(): Record<string, unknown> { const meta = this.store.readMeta(); const global = this.store.globalAggregate(); const split = this.store.provenanceSplit(); return { storageBackend: 'sqlite', storageSchemaVersion: meta?.storageSchemaVersion, migrationVersion: meta?.migrationVersion, migrationStatus: meta?.migrationStatus, recordGeneration: meta?.recordGeneration, aggregateGeneration: meta?.aggregateGeneration, lastAggregateRebuild: meta?.lastAggregateRebuild ?? undefined, recordCount: this.store.recordCount(), aggregateStatus: this.store.verifyAggregates().ok ? 'consistent' : 'stale', lifetimeTotal: global?.total_tokens ?? 0, liveRecordedTotal: split.live, historicalRecoveredTotal: split.historical, historicalRecoveredRecordCount: split.historicalCount, providerAliasGroupCount: this.store.listProviderAliasGroups().length, earliestRecordAt: this.store.earliestRecordAt() ?? undefined, latestRecordAt: this.store.latestRecordAt() ?? undefined }; }
+  private notify(): void { if (this.listeners.size === 0) return; const s = this.summary(); for (const l of [...this.listeners]) { try { l(s); } catch {} } }
+  diagnostics(): Record<string, unknown> { const meta = this.store.readMeta(); const global = this.store.globalAggregate(); const split = this.store.provenanceSplit(); return { storageBackend: 'sqlite', repairedOnOpen: this.store.repairedOnOpen, ...this.store.accountingDiagnostics(), storageSchemaVersion: meta?.storageSchemaVersion, migrationVersion: meta?.migrationVersion, migrationStatus: meta?.migrationStatus, recordGeneration: meta?.recordGeneration, aggregateGeneration: meta?.aggregateGeneration, lastAggregateRebuild: meta?.lastAggregateRebuild ?? undefined, recordCount: this.store.recordCount(), aggregateStatus: this.store.verifyAggregates().ok ? 'consistent' : 'stale', lifetimeTotal: global?.total_tokens ?? 0, liveRecordedTotal: split.live, historicalRecoveredTotal: split.historical, historicalRecoveredRecordCount: split.historicalCount, providerAliasGroupCount: this.store.listProviderAliasGroups().length, earliestRecordAt: this.store.earliestRecordAt() ?? undefined, latestRecordAt: this.store.latestRecordAt() ?? undefined }; }
   close(): void { if (this.closed) return; this.closed = true; this.listeners.clear(); this.store.close(); }
 }
 

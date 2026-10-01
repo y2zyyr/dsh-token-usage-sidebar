@@ -1,6 +1,8 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { PLUGIN_REPOSITORY_URL, PLUGIN_VERSION, formatTokens } from './index.tsx';
 import type { ProviderScope, UsageFacets, UsageFilters } from '../usage/providerAliases.ts';
+import type { UsageHealth } from '../usage/health.ts';
+import { usageRequest } from './request.ts';
 
 export type DetailRange = 'today' | 'yesterday' | '7d' | 'all';
 
@@ -22,6 +24,7 @@ interface Model extends Metrics {
   rawProviders?: ProviderBreakdown[];
 }
 export interface Details {
+  health?: UsageHealth;
   range: DetailRange;
   rangeStartDate?: string;
   rangeEndDate?: string;
@@ -57,13 +60,13 @@ export async function fetchDetails(range: DetailRange, filtersOrSignal?: UsageFi
   const filters = isSignal ? EMPTY_FILTERS : (filtersOrSignal ?? EMPTY_FILTERS) as UsageFilters;
   const requestSignal = isSignal ? filtersOrSignal as AbortSignal : signal;
   try {
-    const res = await fetch('/token-usage/api/details', {
+    const res = await usageRequest('/token-usage/api/details', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ range, filters: { provider: filters.provider ?? null, model: filters.model ?? null } }),
-      signal: requestSignal, cache: 'no-store',
-    });
+      cache: 'no-store',
+    }, requestSignal);
     if (!res.ok) return undefined;
-    const json = await res.json() as { ok?: boolean; value?: Details };
+    const json = res.body as { ok?: boolean; value?: Details };
     return json.ok === true && json.value ? normalizeDetails(json.value) : undefined;
   } catch { return undefined; }
 }
@@ -74,6 +77,9 @@ function replace(template: string, values: Record<string, string>): string {
   return Object.entries(values).reduce((text, [key, value]) => text.replaceAll('{' + key + '}', value), template);
 }
 function providerScopeKey(scope: ProviderScope | null | undefined): string { return scope ? JSON.stringify(scope) : ''; }
+function sameFilters(left: UsageFilters | undefined, right: UsageFilters): boolean {
+  return providerScopeKey(left?.provider) === providerScopeKey(right.provider) && (left?.model ?? null) === (right.model ?? null);
+}
 function providerScopeOf(value: string): ProviderScope | null {
   if (value.length === 0) return null;
   try {
@@ -142,10 +148,11 @@ const SETTINGS_STYLE_ID = 'dsh-token-usage-sidebar/settings.css';
 
 export function TokenUsageSettings({ t }: { t: Translate }): JSX.Element {
   const [range, setRange] = useState<DetailRange>('7d');
-  const [details, setDetails] = useState<Details>();
+  const [data, setDetails] = useState<Details>();
   const [sevenDay, setSevenDay] = useState<Details>();
   const [filters, setFilters] = useState<UsageFilters>(EMPTY_FILTERS);
   const [error, setError] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<number>();
   const [expandedModel, setExpandedModel] = useState<string>();
   const [expandedDay, setExpandedDay] = useState<string>();
   const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
@@ -172,19 +179,22 @@ export function TokenUsageSettings({ t }: { t: Translate }): JSX.Element {
       fetchDetails(selected, selectedFilters, controller.signal), selected === '7d' ? undefined : fetchDetails('7d', selectedFilters, controller.signal),
     ];
     const [nextDetails, nextSeven] = await Promise.all([work[0], work[1] ?? Promise.resolve(undefined)]);
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted || request.current !== controller) return;
     if (nextDetails) setDetails(nextDetails);
-    if (nextSeven) setSevenDay(nextSeven);
-    else if (selected === '7d' && nextDetails) setSevenDay(nextDetails);
-    setError(!nextDetails);
+    setSevenDay(selected === '7d' ? nextDetails : nextSeven);
+    const complete = nextDetails !== undefined && (selected === '7d' || nextSeven !== undefined);
+    setError(!complete);
+    if (complete) setLastUpdated(Date.now());
   }, []);
 
   useEffect(() => {
     void refresh(range, filters);
     timer.current = setInterval(() => { if (!document.hidden) void refresh(range, filters); }, 30_000);
-    return () => { if (timer.current) clearInterval(timer.current); request.current?.abort(); };
+    return () => { if (timer.current) clearInterval(timer.current); request.current?.abort(); request.current = undefined; };
   }, [range, filters, refresh]);
 
+  const details = data?.range === range && sameFilters(data.filters, filters) ? data : undefined;
+  const currentSeven = sevenDay && sameFilters(sevenDay.filters, filters) ? sevenDay : undefined;
   const c = details?.categories ?? EMPTY_METRICS;
   const rangeLabel = range === '7d' && details?.rangeStartDate && details.rangeEndDate ? details.rangeStartDate + ' – ' + details.rangeEndDate : undefined;
   const activeFilter = filters.provider !== null || filters.model !== null;
@@ -209,6 +219,9 @@ export function TokenUsageSettings({ t }: { t: Translate }): JSX.Element {
     </div></div>
 
     {!details && <p className="dtsu-loading">{error ? t('unavailable') : t('loading')}</p>}
+    {details && error && <p className="dtsu-error" role="status">{t('unavailable')}{lastUpdated ? ' ' + t('lastUpdated') + ': ' + new Date(lastUpdated).toLocaleTimeString() : ''}</p>}
+    {details?.health?.status === 'partial' && <p className="dtsu-muted" role="status">{t('partialHistory')}</p>}
+    {details?.health && details.health.accountingAdjustment !== 0 && <p className="dtsu-muted" role="status">{t('accountingAdjusted')}: {details.health.accountingAdjustment.toLocaleString()} tokens</p>}
     {details && <>
       <ScopeFilters details={details} filters={filters} setFilters={setFilterState} t={t} />
       <div className="dtsu-metrics-grid">
@@ -237,7 +250,7 @@ export function TokenUsageSettings({ t }: { t: Translate }): JSX.Element {
 
       <h3 className="dtsu-table-title">{t('sevenDayDaily')}</h3>
       <div className="dtsu-table-wrap"><table className="dtsu-table dtsu-compact-table dtsu-daily-compact"><thead><tr><th>{t('date')}</th><th>{t('total')}</th><th>{t('calls')}</th><th aria-label={t('details')}></th></tr></thead>
-      <tbody>{(sevenDay?.daily ?? []).map((day) => { const expanded = expandedDay === day.date; return <Fragment key={day.date}><tr><td>{day.date}</td><td>{formatTokens(day.totalTokens + day.unknownTokens)}</td><td>{calls(day.callCount)}</td><td className="dtsu-action-cell"><button type="button" className="dtsu-expand-button" aria-expanded={expanded} aria-label={expanded ? t('collapse') : t('expand')} onClick={() => setExpandedDay(expanded ? undefined : day.date)}>{expanded ? '−' : '+'}</button></td></tr>{expanded && <tr className="dtsu-expanded-row"><td colSpan={4}><div className="dtsu-detail-grid"><MetricLine label={t('input')} value={formatTokens(day.inputTokens)} /><MetricLine label={t('output')} value={formatTokens(day.outputTokens)} /><MetricLine label={t('cacheRead')} value={formatTokens(day.cacheReadTokens)} /><MetricLine label={t('cacheWrite')} value={formatTokens(day.cacheWriteTokens)} /><MetricLine label={t('reasoning')} value={formatTokens(day.reasoningTokens)} /><MetricLine label={t('calls')} value={calls(day.callCount)} /></div></td></tr>}</Fragment>; })}</tbody></table></div>
+      <tbody>{(currentSeven?.daily ?? []).map((day) => { const expanded = expandedDay === day.date; return <Fragment key={day.date}><tr><td>{day.date}</td><td>{formatTokens(day.totalTokens)}</td><td>{calls(day.callCount)}</td><td className="dtsu-action-cell"><button type="button" className="dtsu-expand-button" aria-expanded={expanded} aria-label={expanded ? t('collapse') : t('expand')} onClick={() => setExpandedDay(expanded ? undefined : day.date)}>{expanded ? '−' : '+'}</button></td></tr>{expanded && <tr className="dtsu-expanded-row"><td colSpan={4}><div className="dtsu-detail-grid"><MetricLine label={t('input')} value={formatTokens(day.inputTokens)} /><MetricLine label={t('output')} value={formatTokens(day.outputTokens)} /><MetricLine label={t('cacheRead')} value={formatTokens(day.cacheReadTokens)} /><MetricLine label={t('cacheWrite')} value={formatTokens(day.cacheWriteTokens)} /><MetricLine label={t('reasoning')} value={formatTokens(day.reasoningTokens)} /><MetricLine label={t('calls')} value={calls(day.callCount)} /></div></td></tr>}</Fragment>; })}</tbody></table></div>
 
       <div className="dtsu-about" aria-label={t('aboutPlugin')}>
         <div className="dtsu-about-head"><h3>{t('aboutPlugin')}</h3><span className="dtsu-about-version">{t('version')} v{PLUGIN_VERSION}</span></div>
