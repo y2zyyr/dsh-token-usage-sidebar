@@ -1,8 +1,8 @@
 # Architecture — dsh-token-usage-sidebar
 
-Community DeepSeek Harness (DSH) web-profile plugin with a local usage ledger,
+Community DeepSeek Harness (DSH) Web/Desktop plugin with a local usage ledger,
 sidebar summary, and native Settings → Token Usage page. This document describes
-the unreleased changes following v1.1.8.
+version 1.1.9 and its accounting version 2 migration.
 
 ## Data flow
 
@@ -117,8 +117,10 @@ verification and full first recovery still require work proportional to availabl
 
 Build emits self-contained declarations and byte-aligned browser artifacts.
 CI runs tests, TS/TSX checking, build, packed NodeNext/Bundler consumers and archive
-checks on Node 22/24. Tests use synthetic storage, host services and actual React DOM;
-a real DSH boot/UI smoke test remains unverified for these unreleased changes.
+checks on Node 22/24. Tests use synthetic storage, host services and actual React DOM.
+The repaired host/client were also smoke-tested on DSH Desktop 0.2.0-rc.2, including
+sidebar/settings rendering, API responses, ledger preservation and aggregate integrity.
+The DSH 0.1 adapter has fixture coverage but no fresh manual smoke test for this release.
 
 See [JSON migration](docs/migrations/v1.0.1-to-v1.1.0.md),
 [accounting v2 migration](docs/migrations/accounting-v2.md), and

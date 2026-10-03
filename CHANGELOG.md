@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## 1.1.9 — 2026-10-03
 
 ### Accounting and recovery
 - Add accounting version 2: read DSH 0.2 attempt usage and stream fallbacks, preserve
@@ -43,8 +43,11 @@ All notable changes to this project are documented here.
   audit the npm archive and compile external NodeNext/Bundler type consumers in CI.
 - Update the development esbuild dependency and document migration/rollback behavior.
 
-These changes have not been published. Real DSH boot/UI smoke testing remains
-unverified; automated adapters follow the inspected official persistence contracts.
+Validation: 131 synthetic tests pass on Node 22 and 24, with TypeScript, build,
+archive, and external consumer checks. The repaired host and client were also
+smoke-tested in DSH Desktop 0.2.0-rc.2: sidebar and settings rendering, summary and
+detail APIs, ledger preservation, and aggregate verification. Unverifiable old
+history remains retained and is reported as partial coverage.
 
 ## 1.1.8 — 2026-09-29
 

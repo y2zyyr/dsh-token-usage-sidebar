@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-这是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web Profile 的社区插件，在侧边栏显示由 provider/runtime 上报并持久化保存的 Token 用量，并在原生设置中提供完整的 **Token 用量** 页面。
+这是一个面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web 和 Desktop profile 的社区插件，在侧边栏显示由 provider/runtime 上报并持久化保存的 Token 用量，并在原生设置中提供完整的 **Token 用量** 页面。
 
 **项目网站：** [dsh-token-usage-sidebar](https://y2zyyr.github.io/dsh-token-usage-sidebar/zh/)
 
@@ -17,8 +17,9 @@ Total       累计
 
 这是社区插件，并非 DeepSeek 官方插件。
 
-当前工作目录包含**尚未发布的可靠性修复**，详见
-[CHANGELOG.md](CHANGELOG.md#unreleased)。npm 已发布版本仍为 v1.1.8。
+**v1.1.9** 修正重试与 fork 会话的核算，改进历史恢复和账本校验，并防止界面显示
+过期范围的数据。详见 [CHANGELOG.md](CHANGELOG.md) 与
+[核算版本 2 的迁移说明](docs/migrations/accounting-v2.md)。
 
 ## 功能
 
@@ -53,6 +54,16 @@ Total       累计
 dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
 # 安装后重启 `dsh web`。
 ```
+
+桌面版请使用 DeepSeek Harness Desktop 提供的 `dsh` 命令：
+
+```bash
+dsh plugin --profile desktop add @y2zyyr/dsh-token-usage-sidebar
+# 安装后重启 DeepSeek Harness Desktop。
+```
+
+Desktop 提供的 CLI 可以管理其保留的 `desktop` profile。更新和卸载时也使用这个
+CLI，把下方命令中的 `web` 替换为 `desktop` 即可。
 
 `dsh plugin` 直接接受 scoped 包名；插件会加入 profile 的 bundle 列表，其 loader entry
 仍保持稳定的 id `token-usage-sidebar`。也可以让能访问你本机 DSH 的 Agent 直接安装
@@ -201,13 +212,17 @@ Token 明细单元，包括早期本地版本写出的分日账本，并按规�
 
 ## 兼容性与状态
 
-当前插件版本：**v1.1.8**（npm 包 `@y2zyyr/dsh-token-usage-sidebar`；源码见 GitHub）。
+当前插件版本：**v1.1.9**（npm 包 `@y2zyyr/dsh-token-usage-sidebar`；源码见 GitHub）。
 
-已在支持的运行时（提供 Node 内置 `node:sqlite` 模块）上验证 DeepSeek Harness `0.1.0-rc.6` 的 `web` profile。包元数据也允许在 DSH `0.2.0-rc.2` 上安装：插件不使用 `@deepseek-ai/dsh-storage-domain`，因此不再要求旧版 `0.1.0-rc.6`；Cordis peer 范围覆盖 `4.0.x`。尚未单独在 DSH `0.2.0-rc.2` 上完成运行时冒烟验证；仍要求 Node 提供内置 `node:sqlite` 模块。
+修复后的 host 与 client 已在 DeepSeek Harness Desktop `0.2.0-rc.2` 完成冒烟验证：
+侧边栏与设置页显示、汇总和明细 API、原有账本记录保留及聚合一致性。运行时需提供
+Node 内置 `node:sqlite` 模块和官方 `sessionPersistence` 服务。Cordis peer 范围覆盖
+`4.0.x`；插件不依赖 `@deepseek-ai/dsh-storage-domain`。
 
-本次未发布改动要求 host 提供官方 `sessionPersistence` 服务。0.1/0.2 读取适配、
-实际 host 路由与 React 组件已有自动化夹具测试；本次改动的真实 DSH 启动及人工
-界面冒烟测试尚未验证。
+早期版本曾验证 DSH `0.1.0-rc.6` 的 `web` profile。1.1.9 的 0.1/0.2 读取适配、
+host 路由与 React 组件已有自动化夹具测试；本次发布尚未重新完成 DSH 0.1 的人工
+冒烟测试。无法读取或短于旧账本的历史日志不会覆盖原有用量，界面会提示部分历史
+尚未核实。历史较多时，首次核验可能需要一定时间。
 
 ### 可靠性保证（v1.1）
 

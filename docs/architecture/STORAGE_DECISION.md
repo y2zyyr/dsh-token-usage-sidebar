@@ -1,6 +1,6 @@
 # dsh-token-usage-sidebar — v1.1.0 Storage Architecture Decision
 
-Status: ACCEPTED for v1.1.0; unreleased integrity/query update after v1.1.8
+Status: ACCEPTED for v1.1.0; integrity/query updates released in v1.1.9
 Date: 2026-08-16
 
 ## Problem

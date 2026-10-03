@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) web-profile plugin that keeps provider-reported token usage locally. It provides both a persistent sidebar summary and a native **Token Usage** settings page.
+A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) plugin for Web and Desktop profiles that keeps provider-reported token usage locally. It provides both a persistent sidebar summary and a native **Token Usage** settings page.
 
 **Project website:** [dsh-token-usage-sidebar](https://y2zyyr.github.io/dsh-token-usage-sidebar/)
 
@@ -17,8 +17,9 @@ Total       …
 
 This is a community plugin, not an official DeepSeek plugin.
 
-The working tree includes **unreleased reliability fixes** documented in
-[CHANGELOG.md](CHANGELOG.md#unreleased). The published release remains v1.1.8.
+**v1.1.9** corrects retry and fork accounting, strengthens historical recovery and
+ledger validation, and prevents stale browser results. See [CHANGELOG.md](CHANGELOG.md)
+and the [accounting v2 migration notes](docs/migrations/accounting-v2.md).
 
 ## Features
 
@@ -64,6 +65,16 @@ Install the plugin into the DSH `web` profile, then restart DSH:
 dsh plugin --profile web add @y2zyyr/dsh-token-usage-sidebar
 # Restart `dsh web` after installation.
 ```
+
+For Desktop, use the `dsh` command provided by DeepSeek Harness Desktop:
+
+```bash
+dsh plugin --profile desktop add @y2zyyr/dsh-token-usage-sidebar
+# Restart DeepSeek Harness Desktop after installation.
+```
+
+The Desktop-provided CLI manages its reserved `desktop` profile. Use that CLI and
+replace `web` with `desktop` in the update and removal commands below.
 
 `dsh plugin` accepts the scoped package name directly; the plugin is added to the
 profile's bundle list and its loader entry keeps the stable id `token-usage-sidebar`.
@@ -239,18 +250,19 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
 
 ## Compatibility and Status
 
-Current release: **v1.1.8** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
+Current release: **v1.1.9** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
 
-Verified with DeepSeek Harness `0.1.0-rc.6` and its `web` profile, on a runtime whose
-Node.js provides the built-in `node:sqlite` module (Node with `node:sqlite`).
-The package metadata also permits installation on DSH `0.2.0-rc.2`: it no longer
-requires `@deepseek-ai/dsh-storage-domain`, which this plugin does not use, and accepts
-Cordis `4.0.x`. Runtime behavior has not been separately smoke-tested on DSH
-`0.2.0-rc.2`; `node:sqlite` remains required.
+The repaired host and client were smoke-tested with DeepSeek Harness Desktop
+`0.2.0-rc.2`: sidebar and settings rendering, summary and detail APIs, preservation of
+existing ledger records, and aggregate integrity. Node's built-in `node:sqlite` and
+the official `sessionPersistence` host service are required. The Cordis peer range
+accepts `4.0.x`; the plugin does not require `@deepseek-ai/dsh-storage-domain`.
 
-The unreleased changes require the official `sessionPersistence` host service. Their
-DSH 0.1/0.2 adapters, actual host routes, and React components have automated fixture
-coverage; a real DSH boot and manual UI smoke test remain unverified for these changes.
+Earlier releases were verified with DSH `0.1.0-rc.6` and its `web` profile. The 1.1.9
+DSH 0.1/0.2 adapters, host routes, and React components have automated fixture
+coverage; DSH 0.1 has not had a fresh manual smoke test for this release. Unreadable
+or shorter historical logs do not overwrite existing usage, and the UI reports
+partial history. The first verification pass can take time with a large history.
 
 ### Reliability guarantees (v1.1)
 

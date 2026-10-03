@@ -1,6 +1,6 @@
 # Accounting version 2 — retries, fork ownership and recovery
 
-Status: unreleased after v1.1.8. Storage schema 3 is additive; storage paths and
+Available from v1.1.9. Storage schema 3 is additive; storage paths and
 plugin identity remain unchanged. This accounting change is separate from the
 older JSON-to-SQLite migration.
 
