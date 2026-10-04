@@ -132,6 +132,15 @@ export declare class DurableStore {
     };
     readSessionCheckpoint<T>(sessionId: string): T | undefined;
     writeSessionCheckpoint(sessionId: string, checkpoint: unknown): void;
+    /** Remembered failed scan attempt for one session at one source revision. */
+    readSessionScanFailure(sessionId: string): {
+        revision: string;
+        failureCode: string;
+        attemptedAt: number;
+    } | undefined;
+    writeSessionScanFailure(sessionId: string, revision: string, failureCode: string, attemptedAt: number): void;
+    clearSessionScanFailure(sessionId: string): void;
+    sessionScanFailureCount(): number;
     readSourceDiscoveryCache<T>(): T | undefined;
     writeSourceDiscoveryCache(cache: unknown): void;
     /** Only a complete, validated session replay may upgrade legacy attempt identities. */

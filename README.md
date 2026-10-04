@@ -17,11 +17,16 @@ Total       …
 
 This is a community plugin, not an official DeepSeek plugin.
 
-**v1.1.10** removes the two in-interface history notices: the sidebar and settings
-"partial history could not be verified" line and the settings "verified historical
-accounting adjustment" line. Coverage and adjustment figures stay available in the
-summary/details API payloads (`health.status`, `health.accountingAdjustment`), and no
-accounting, schema, storage or HTTP behavior changed. See [CHANGELOG.md](CHANGELOG.md).
+**v1.1.11** shows saved usage while recovering history. After startup integrity checks,
+the durable ledger is served — the persisted-session scan now runs in the background instead of
+holding the API behind an `initializing` error — and a source that could not be verified
+at an unchanged source fingerprint is remembered (schema 4, additive) so it is not re-read at
+every start. Sources are retried when their own file identity or opaque revision changes, after the 24-hour retry
+window, or when startup repaired the aggregates. See [CHANGELOG.md](CHANGELOG.md).
+
+**v1.1.10** removed the two in-interface history notices (the "partial history could not
+be verified" line and the "verified historical accounting adjustment" line); coverage and
+adjustment figures remain in the summary/details API payloads.
 
 ## Features
 
@@ -252,7 +257,7 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
 
 ## Compatibility and Status
 
-Current release: **v1.1.10** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
+Current release: **v1.1.11** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
 
 The repaired host and client were smoke-tested with DeepSeek Harness Desktop
 `0.2.0-rc.2`: sidebar and settings rendering, summary and detail APIs, preservation of
@@ -284,6 +289,22 @@ notice. The first verification pass can take time with a large history.
   migration never leaves unverified records visible and resumes cleanly.
 - **Shutdown.** Committed batches are already durable before shutdown. Disposal
   cancels recovery, unregisters listeners/routes, and closes owned handles.
+- **Restart without a blank screen (v1.1.11).** The durable ledger is served as soon as it
+  passes startup integrity checks; the persisted-session scan runs in the background instead of holding the API
+  behind an `initializing` error. Sources that failed verification at an unchanged
+  source fingerprint are remembered (storage schema 4), so a restart does not re-read the same
+  unverifiable logs; they are retried when the source changes, after the 24-hour retry
+  window, or after a startup repair. An empty ledger still blocks, so a failed history is
+  never served as zero usage.
+
+DSH's JSONL historical revisions include a hash of other session sources. For failed
+reads, an unchanged source file stays cached through unrelated corpus changes until
+the retry window expires. Repairs to related sources are reconsidered on a subsequent
+startup once the 24-hour retry window expires. Successful checkpoints retain the complete revision check.
+
+Storage schema 4 adds only a disposable scan cache; existing accounting records are
+preserved. Versions through 1.1.10 cannot open schema 4. Keep a consistent ledger backup
+before upgrading if you may need to return to an older version.
 
 ### Reliability guarantees (v1.0.1)
 

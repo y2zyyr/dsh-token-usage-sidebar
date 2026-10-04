@@ -1,6 +1,6 @@
 // src/usage/durable/schema.ts — SQLite schema (v1.1 scalable durable ledger)
 // usage_records = authoritative source of truth; aggregate_* = derived cache.
-export const STORAGE_SCHEMA_VERSION = 3;
+export const STORAGE_SCHEMA_VERSION = 4;
 export const SCHEMA_SQL: readonly string[] = [
   'CREATE TABLE IF NOT EXISTS usage_records (' +
   'canonical_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn INTEGER NOT NULL, ' +
@@ -40,6 +40,10 @@ export const SCHEMA_SQL: readonly string[] = [
   'reason TEXT NOT NULL, verified_at INTEGER NOT NULL)',
   'CREATE TABLE IF NOT EXISTS session_recovery (' +
   'session_id TEXT PRIMARY KEY, accounting_version INTEGER NOT NULL, checkpoint_json TEXT NOT NULL)',
+  // Additive (schema 4): remembered failed scan attempts. Purely a cache — it
+  // never holds usage data, and dropping it only costs a full re-read.
+  'CREATE TABLE IF NOT EXISTS session_scan_failures (' +
+  'session_id TEXT PRIMARY KEY, revision TEXT NOT NULL, failure_code TEXT NOT NULL, attempted_at INTEGER NOT NULL)',
   'CREATE TABLE IF NOT EXISTS source_discovery_cache (' +
   'id INTEGER PRIMARY KEY CHECK (id=1), cache_json TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS provider_alias_groups (' +

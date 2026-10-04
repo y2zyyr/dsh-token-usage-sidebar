@@ -21,6 +21,8 @@ interface ReadHandle {
   close(): Promise<void>;
 }
 export interface PersistenceLike {
+  /** Backend identity used only for explicitly supported revision formats. */
+  name?: string;
   list(options?: unknown): Promise<readonly unknown[]>;
   listSnapshots?: (signal?: AbortSignal) => Promise<readonly unknown[]>;
   open?: (id: string, access: 'read', options?: { signal?: AbortSignal }) => Promise<ReadHandle>;
@@ -32,9 +34,22 @@ export interface SessionRecoveryResult {
   sessionsReadSuccessfully: number;
   sessionsReadFailed: number;
   sessionsSkippedUnchanged: number;
+  /** Sessions whose previous identical-revision read failed; not re-read this pass. */
+  sessionsSkippedKnownUnreadable: number;
   invalidUsageEvents: number;
   errors: string[];
+  listMs: number;
+  durationMs: number;
 }
+
+export interface SessionRecoveryOptions {
+  /** How long a remembered failure suppresses an unchanged-source re-read. */
+  retryTtlMs?: number;
+  now?: () => number;
+}
+
+/** A failed read is not retried for the same revision until this has elapsed. */
+export const SESSION_SCAN_RETRY_TTL_MS = 24 * 60 * 60 * 1000;
 interface RecoveryCheckpoint {
   offset: number;
   inheritedEventCount: number;
@@ -43,6 +58,34 @@ interface RecoveryCheckpoint {
   revision?: string;
 }
 const hashEvent = (event: SessionEventLike) => createHash('sha256').update(JSON.stringify(event)).digest('hex');
+
+/**
+ * Identify one source revision well enough to justify skipping a re-read of a
+ * previously failed session. JSONL historical revisions include a corpus hash:
+ * writing ANY other session changes it. For failed reads only, throttle retries
+ * by the unchanged source file identity until TTL expiry. Successful checkpoints
+ * still use the full official revision to verify related fork/migration sources.
+ * Other backends keep their opaque revision; when a source has none, a byte-size
+ * fingerprint still changes when an
+ * append-only log grows. No fingerprint means no memory: such a source is
+ * always retried, because a changed log cannot be detected.
+ */
+function scanFingerprint(revision: string | undefined, sizeBytes: unknown, backend?: string): string | undefined {
+  if (revision !== undefined) {
+    const historical = backend === 'session-persistence-jsonl'
+      ? /^(\d+:\d+:(\d+):\d+:\d+):[a-f0-9]{64}$/.exec(revision) : null;
+    if (historical && isTokenCount(sizeBytes) && Number(historical[2]) === sizeBytes) {
+      return 'historical-file:' + historical[1];
+    }
+    return 'revision:' + revision;
+  }
+  return isTokenCount(sizeBytes) ? 'size:' + sizeBytes : undefined;
+}
+
+function rememberedFingerprint(value: string, sizeBytes: unknown, backend?: string): string {
+  // Accept already-written schema-4 cache entries without changing their age.
+  return value.startsWith('revision:') ? scanFingerprint(value.slice('revision:'.length), sizeBytes, backend)! : value;
+}
 const SAFE_ERRORS = new Set(['invalid-session-descriptor', 'invalid-session-read', 'invalid-session-handle',
   'unsupported-session-persistence', 'session-recovery-checkpoint-conflict', 'non-contiguous-session-log',
   'invalid-session-usage-or-fork-cut', 'fork-ownership-unavailable', 'invalid-fork-inherited-cut',
@@ -96,32 +139,59 @@ export function snapshotLiveSession(session: LiveSessionLike, onInvalidUsage?: (
 }
 
 /** Always closes read handles; records and their checkpoint commit together. */
-export async function recoverPersistedSessions(store: DurableStore, persistence: PersistenceLike | undefined, signal: AbortSignal): Promise<SessionRecoveryResult> {
+export async function recoverPersistedSessions(store: DurableStore, persistence: PersistenceLike | undefined,
+  signal: AbortSignal, options: SessionRecoveryOptions = {}): Promise<SessionRecoveryResult> {
+  const now = options.now ?? (() => Date.now());
+  const retryTtlMs = options.retryTtlMs ?? SESSION_SCAN_RETRY_TTL_MS;
+  const startedAt = now();
   const result: SessionRecoveryResult = { sourceScanStatus: 'unknown', sessionsDiscovered: 0, sessionsReadSuccessfully: 0,
-    sessionsReadFailed: 0, sessionsSkippedUnchanged: 0, invalidUsageEvents: 0, errors: [] };
-  if (!persistence) return result;
+    sessionsReadFailed: 0, sessionsSkippedUnchanged: 0, sessionsSkippedKnownUnreadable: 0, invalidUsageEvents: 0,
+    errors: [], listMs: 0, durationMs: 0 };
+  if (!persistence) { result.durationMs = now() - startedAt; return result; }
   let snapshots: readonly unknown[];
   try {
+    const listStartedAt = now();
     snapshots = persistence.open ? await persistence.list({ signal })
       : persistence.listSnapshots ? await persistence.listSnapshots(signal) : await persistence.list(signal);
+    result.listMs = now() - listStartedAt;
     if (!Array.isArray(snapshots)) throw new Error('invalid-session-list');
   } catch {
-    if (signal.aborted) return result;
-    result.sourceScanStatus = 'failed'; result.errors.push('session-list-failed'); return result;
+    if (signal.aborted) { result.durationMs = now() - startedAt; return result; }
+    result.sourceScanStatus = 'failed'; result.errors.push('session-list-failed');
+    result.durationMs = now() - startedAt; return result;
   }
   result.sessionsDiscovered = snapshots.length;
   for (const snapshot of snapshots) {
     if (signal.aborted) break;
+    let id: string | undefined;
+    let fingerprint: string | undefined;
     try {
-      const value = snapshot as { header?: HeaderLike; id?: string; eventCount?: number; revision?: unknown };
-      const id = value.header?.id ?? value.id;
-      if (typeof id !== 'string' || id.length === 0) throw new Error('invalid-session-descriptor');
+      if (snapshot === null || typeof snapshot !== 'object' || Array.isArray(snapshot)) throw new Error('invalid-session-descriptor');
+      const value = snapshot as { header?: HeaderLike; id?: string; eventCount?: number; revision?: unknown; sizeBytes?: unknown };
+      const sourceId = value.header?.id ?? value.id;
+      if (typeof sourceId !== 'string' || sourceId.length === 0) throw new Error('invalid-session-descriptor');
+      id = sourceId;
       const revision = typeof value.revision === 'string' && value.revision.length > 0 ? value.revision : undefined;
+      fingerprint = scanFingerprint(revision, value.sizeBytes, persistence.name);
+      const remembered = store.readSessionScanFailure(id);
       const saved = store.readSessionCheckpoint<RecoveryCheckpoint>(id);
       // Official revisions identify both the backing source and its log state.
       // No source read is needed while a validated committed checkpoint matches.
       if (!store.repairedOnOpen && validCheckpoint(saved) && revision !== undefined && saved.revision === revision) {
+        if (remembered) store.clearSessionScanFailure(id);
         result.sessionsSkippedUnchanged += 1; result.sessionsReadSuccessfully += 1;
+        await new Promise<void>((resolve) => setImmediate(resolve)); continue;
+      }
+      // A repair invalidates every checkpoint, so it also invalidates remembered
+      // failures: retry once against the repaired ledger.
+      const age = remembered ? now() - remembered.attemptedAt : -1;
+      if (!store.repairedOnOpen && remembered && fingerprint !== undefined
+        && rememberedFingerprint(remembered.revision, value.sizeBytes, persistence.name) === fingerprint
+        && age >= 0 && age < retryTtlMs) {
+        // Same source revision, already known unreadable: keep reporting it as
+        // failed without paying the read again on every start.
+        result.sessionsSkippedKnownUnreadable += 1; result.sessionsReadFailed += 1;
+        result.errors.push(SAFE_ERRORS.has(remembered.failureCode) ? remembered.failureCode : 'session-read-failed');
         await new Promise<void>((resolve) => setImmediate(resolve)); continue;
       }
       if (persistence.open) {
@@ -130,11 +200,16 @@ export async function recoverPersistedSessions(store: DurableStore, persistence:
         if (await recoverV1(store, persistence, id, signal, () => { result.invalidUsageEvents += 1; }, revision)) result.sessionsSkippedUnchanged += 1;
       } else throw new Error('unsupported-session-persistence');
       result.sessionsReadSuccessfully += 1;
+      if (remembered) store.clearSessionScanFailure(id);
     } catch (error) {
       if (signal.aborted) break;
       result.sessionsReadFailed += 1;
-      const message = (error as Error).message;
-      result.errors.push(SAFE_ERRORS.has(message) ? message : 'session-read-failed');
+      const message = error instanceof Error ? error.message : '';
+      const code = SAFE_ERRORS.has(message) ? message : 'session-read-failed';
+      result.errors.push(code);
+      if (id !== undefined && fingerprint !== undefined) {
+        try { store.writeSessionScanFailure(id, fingerprint, code, now()); } catch {}
+      }
     }
     // Yield between sessions so recovery does not monopolize the host.
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -142,6 +217,7 @@ export async function recoverPersistedSessions(store: DurableStore, persistence:
   result.sourceScanStatus = result.sessionsReadFailed > 0
     ? result.sessionsReadSuccessfully > 0 ? 'partial' : 'failed'
     : signal.aborted ? 'partial' : 'complete';
+  result.durationMs = now() - startedAt;
   return result;
 }
 

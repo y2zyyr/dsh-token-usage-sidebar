@@ -106,9 +106,10 @@ export class DurableStore {
   private ensureMeta(): void {
     const row = this.statement('SELECT COUNT(*) AS c FROM meta').get() as { c: number };
     if (Number(row.c) > 0) {
-      // Adding the local alias table is an additive schema change. Existing
-      // ledgers keep all records and aggregates; only the metadata version is
-      // advanced so diagnostics can identify the new schema.
+      // Adding the local alias table (schema 3) and the session scan-failure
+      // cache (schema 4) are additive changes. Existing ledgers keep all records
+      // and aggregates; only the metadata version is advanced so diagnostics can
+      // identify the new schema.
       this.statement('UPDATE meta SET storage_schema_version=? WHERE id=1 AND storage_schema_version<?')
         .run(STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION);
       return;
@@ -432,6 +433,28 @@ export class DurableStore {
   writeSessionCheckpoint(sessionId: string, checkpoint: unknown): void {
     this.statement('INSERT INTO session_recovery (session_id,accounting_version,checkpoint_json) VALUES (?,2,?) ON CONFLICT(session_id) DO UPDATE SET accounting_version=2,checkpoint_json=excluded.checkpoint_json')
       .run(sessionId, JSON.stringify(checkpoint));
+  }
+
+  /** Remembered failed scan attempt for one session at one source revision. */
+  readSessionScanFailure(sessionId: string): { revision: string; failureCode: string; attemptedAt: number } | undefined {
+    const row = this.statement('SELECT revision,failure_code,attempted_at FROM session_scan_failures WHERE session_id=?')
+      .get(sessionId) as { revision: string; failure_code: string; attempted_at: number } | undefined;
+    if (!row) return undefined;
+    return { revision: String(row.revision), failureCode: String(row.failure_code), attemptedAt: Number(row.attempted_at) };
+  }
+
+  writeSessionScanFailure(sessionId: string, revision: string, failureCode: string, attemptedAt: number): void {
+    this.statement('INSERT INTO session_scan_failures (session_id,revision,failure_code,attempted_at) VALUES (?,?,?,?) ' +
+      'ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision, failure_code=excluded.failure_code, attempted_at=excluded.attempted_at')
+      .run(sessionId, revision, failureCode, attemptedAt);
+  }
+
+  clearSessionScanFailure(sessionId: string): void {
+    this.statement('DELETE FROM session_scan_failures WHERE session_id=?').run(sessionId);
+  }
+
+  sessionScanFailureCount(): number {
+    return Number((this.statement('SELECT COUNT(*) AS c FROM session_scan_failures').get() as { c: number }).c);
   }
 
   readSourceDiscoveryCache<T>(): T | undefined {

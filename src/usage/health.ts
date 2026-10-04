@@ -13,5 +13,7 @@ export interface UsageHealth {
   legacyRecordCount: number;
   accountingAdjustment: number;
   accountingChangeCount: number;
+  /** True while the persisted-session scan still runs in the background (v1.1.11). */
+  scanInProgress: boolean;
   updatedAt: number;
 }

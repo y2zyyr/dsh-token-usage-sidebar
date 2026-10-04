@@ -39,8 +39,9 @@ export function v1(records) {
 export function persistenceV2(sessions, options = {}) {
   const reads = [], closed = [], opened = [];
   return {
+    name: options.name,
     reads, closed, opened,
-    async list() { if (options.listError) throw new Error('synthetic private read error'); return sessions.map((session) => ({ header: session.header ?? { id: session.id }, eventCount: session.events.length, revision: session.revision })); },
+    async list() { if (options.listError) throw new Error('synthetic private read error'); return sessions.map((session) => ({ header: session.header ?? { id: session.id }, eventCount: session.events.length, revision: session.revision, sizeBytes: session.sizeBytes })); },
     async open(id, access) {
       if (access !== 'read') throw new Error('unexpected write ownership');
       const session = sessions.find((item) => item.id === id);

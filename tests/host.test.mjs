@@ -46,9 +46,9 @@ function makeHost(options = {}) {
       await route(req, res); return { status: res.statusCode, ...result };
     },
     async ready() {
-      for (let i = 0; i < 100; i += 1) {
+      for (let i = 0; i < 400; i += 1) {
         const debug = await this.api('debug');
-        if (debug.value.health.status !== 'loading') return debug.value;
+        if (debug.value.health.status !== 'loading' && debug.value.health.scanInProgress === false) return debug.value;
         await tick();
       }
       throw new Error('host initialization did not settle');
@@ -141,6 +141,89 @@ test('unavailable fork ownership never counts an inherited live event as child u
     await host.ready(); host.emit('session/event', child, usageEvent(0, 100));
     const response = await host.api('summary'); assert.equal(response.value.lifetimeTotal, 100); assert.equal(response.value.health.status, 'partial');
   } finally { host.dispose(); }
+});
+
+test('a restart serves durable totals while the session scan still runs in the background', async () => {
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  const persistence = persistenceV2([{ id: 'slow', revision: 'rev-1', events: [usageEvent(0, 50)] }],
+    { beforeRead: async () => { await gate; } });
+  const host = makeHost({ records: [record('known:1:0', 400)], persistence });
+  try {
+    const debug = await host.api('debug');
+    assert.equal(debug.value.health.scanInProgress, true, 'the scan must run in the background');
+    assert.notEqual(debug.value.health.status, 'loading', 'a restart must not block on the scan');
+    const during = await host.api('summary');
+    assert.equal(during.status, 200, 'durable aggregates are served during the scan');
+    assert.equal(during.value.lifetimeTotal, 400);
+    assert.equal(during.value.health.scanInProgress, true);
+    release();
+    const settled = await host.ready();
+    assert.equal(settled.scanInProgress, false);
+    assert.equal(settled.sessionsReadSuccessfully, 1);
+    const after = await host.api('summary');
+    assert.equal(after.status, 200); assert.equal(after.value.lifetimeTotal, 450);
+  } finally { host.dispose(); }
+});
+
+test('an empty ledger still blocks on the scan so a failure is never shown as zero usage', async () => {
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  const persistence = { async list() { await gate; throw new Error('synthetic private read error'); } };
+  const host = makeHost({ persistence });
+  try {
+    const debug = await host.api('debug');
+    assert.equal(debug.value.health.scanInProgress, false);
+    assert.equal(debug.value.health.status, 'loading', 'an empty ledger must not report ready before the scan');
+    const blocked = await host.api('summary');
+    assert.equal(blocked.status, 503); assert.equal(blocked.error.code, 'initializing');
+    release();
+    await host.ready();
+    assert.equal((await host.api('summary')).status, 503, 'an unusable empty history is never served as zero usage');
+  } finally { host.dispose(); }
+});
+
+test('summary, details and live usage remain available while history enumeration waits', async () => {
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  const host = makeHost({ records: [record('known:1:0', 400, { accountingVersion: 1 })],
+    persistence: { async list() { await gate; throw new Error('private enumeration failure'); } } });
+  try {
+    const summary = await host.api('summary');
+    assert.equal(summary.status, 200);
+    assert.equal(summary.value.health.scanInProgress, true);
+    assert.equal(summary.value.health.legacyRecordCount, 1, 'startup diagnostics come from the existing ledger');
+    const details = await host.api('details', { range: 'all' });
+    assert.equal(details.status, 200);
+    assert.equal(details.value.totalTokens, 400);
+    const live = { id: 'live', events: [] };
+    host.emit('session/created', live);
+    const event = usageEvent(0, 50); live.events.push(event);
+    host.emit('session/event', live, event);
+    assert.equal((await host.api('summary')).value.lifetimeTotal, 450);
+    release();
+    const debug = await host.ready();
+    assert.equal(debug.sourceScanStatus, 'failed');
+    assert.equal(debug.scanInProgress, false);
+    assert.equal((await host.api('summary')).status, 200, 'a failed background enumeration preserves saved usage');
+    assert.equal((await host.api('summary')).value.lifetimeTotal, 450);
+  } finally { release(); host.dispose(); }
+});
+
+test('disposing during background recovery closes the handle and never commits its pending records', async () => {
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  const persistence = persistenceV2([{ id: 'slow', revision: 'rev-1', events: [usageEvent(0, 50)] }],
+    { beforeRead: async () => { await gate; } });
+  const host = makeHost({ records: [record('known:1:0', 400)], persistence });
+  try {
+    for (let i = 0; i < 20 && persistence.reads.length === 0; i += 1) await tick();
+    assert.equal(persistence.reads.length, 1);
+    host.dispose(); release();
+    for (let i = 0; i < 20 && persistence.closed.length === 0; i += 1) await tick();
+    assert.deepEqual(persistence.closed, ['slow']);
+    const store = new DurableStore({ path: host.dbPath });
+    try {
+      assert.equal(store.globalAggregate().total_tokens, 400);
+      assert.equal(store.sessionScanFailureCount(), 0, 'cancellation is never remembered as a source failure');
+    } finally { store.close(); }
+  } finally { release(); host.dispose(); }
 });
 
 test('history enumeration errors are reported and never pretend an empty history succeeded', async () => {

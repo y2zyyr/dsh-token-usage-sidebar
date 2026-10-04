@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.11 — 2026-10-04
+
+### Startup and recovery
+- Serve saved usage after startup integrity checks. With a usable ledger, the persisted-session scan no longer
+  gates `summary`/`details` behind HTTP 503 `initializing`; the scan runs in the background and
+  updates diagnostics (`health.scanInProgress`).
+- Remember failed session reads per source revision in an additive SQLite table
+  (`session_scan_failures`, storage schema 4). A source that could not be verified at an
+  unchanged revision is no longer re-read on every start — previously each boot re-read
+  the same unverifiable logs, which took minutes. Retries happen when the source fingerprint (or
+  the byte size, when a source exposes no revision) changes, when the 24-hour retry
+  window expires, or after a startup repair invalidated the caches. A successful read
+  clears the memory; a source with neither revision nor size is never remembered.
+- JSONL historical revisions also contain a corpus hash that changes when other logs
+  change. Failed-read retries use the source file identity during the retry window,
+  so unrelated activity does not invalidate every failure. Related-source repairs are
+  retried after 24 hours; successful checkpoints still validate the complete revision.
+- Report `listMs`, `durationMs`, `sessionsSkippedKnownUnreadable` and the number of
+  remembered failures in the debug payload.
+- Malformed session descriptors do not interrupt recovery of later valid sessions.
+  Successful recovery clears obsolete failures, including after aggregate repair;
+  clock rollback expires cached failures, and cached errors retain safe diagnostics.
+- An empty ledger still blocks on the scan and still reports a failed history as an
+  error, so unusable history is never served as zero usage. Accounting semantics,
+  records, aggregates and storage paths are unchanged; API diagnostics have additive
+  fields. Existing ledgers upgrade in place without rewriting usage records. Versions
+  through 1.1.10 cannot open schema 4; retain a consistent pre-upgrade backup if needed.
+
 ## 1.1.10 — 2026-10-04
 
 ### Interface

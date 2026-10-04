@@ -201,6 +201,7 @@ export function apply(ctx: Context): void {
     let sourceDiscoveryApplied = 0;
     let migration: MigrationResult | undefined;
     let recovery: SessionRecoveryResult | undefined;
+    let scanInProgress = false;
     let liveDiscovered = 0, liveRead = 0, liveListFailed = false, invalidUsageEvents = 0;
     let accounting = { accountingVersion: 2, legacyRecordCount: 0, accountingAdjustment: 0, accountingChangeCount: 0 };
     let updatedAt = Date.now();
@@ -222,7 +223,7 @@ export function apply(ctx: Context): void {
         sessionsReadSuccessfully: recovery?.sessionsReadSuccessfully ?? liveRead,
         sessionsReadFailed: (recovery?.sessionsReadFailed ?? 0) + liveFailed(),
         invalidUsageEvents: invalidUsageEvents + (recovery?.invalidUsageEvents ?? 0),
-        ...accounting, updatedAt,
+        ...accounting, scanInProgress, updatedAt,
       };
     };
     const trustedHosts = () => Array.isArray(host.webRuntime?.trustedHosts) ? host.webRuntime.trustedHosts as string[] : [];
@@ -256,6 +257,8 @@ export function apply(ctx: Context): void {
                   recordCount: item.recordCount, totalTokens: item.totalTokens, imported: item.imported })),
               } : undefined,
               sessionRecovery: recovery,
+              sessionPersistenceBackend: host.sessionPersistence?.name,
+              scanFailuresRemembered: store?.sessionScanFailureCount(),
             } }); return;
           }
           const currentStore = store, currentAggregator = aggregator;
@@ -371,6 +374,18 @@ export function apply(ctx: Context): void {
           } catch { phase = 'failed'; failureCode = 'live-write-failed'; }
         });
         listen('session/disposed', (session: LiveSessionLike) => { collectors.delete(session.id); });
+        // A restart must not blank the interface: the durable ledger already
+        // holds verified aggregates, so serve them now and finish the
+        // persisted-session scan in the background (v1.1.11). An empty ledger
+        // keeps the blocking path below, where a failed scan is a real error.
+        accounting = store.accountingDiagnostics();
+        const global = store.globalAggregate();
+        const usable = (global?.calls ?? 0) + (global?.unknown_calls ?? 0) > 0;
+        if (!failureCode && usable) {
+          phase = 'ready'; scanInProgress = true; updatedAt = Date.now();
+          void finishRecovery();
+          return;
+        }
         recovery = await recoverPersistedSessions(store, host.sessionPersistence, abort.signal);
         if (disposed) return;
         accounting = store.accountingDiagnostics();
@@ -384,6 +399,26 @@ export function apply(ctx: Context): void {
         if (disposed) return;
         phase = 'failed'; failureCode = 'initialization-failed';
         host.logger?.warn?.('[dsh-token-usage-sidebar] initialization failed; ledger files preserved');
+      }
+    }
+    /** Background half of initialize(): never gates the API, only diagnostics. */
+    async function finishRecovery(): Promise<void> {
+      try {
+        recovery = await recoverPersistedSessions(store!, host.sessionPersistence, abort.signal);
+        if (disposed) return;
+        accounting = store!.accountingDiagnostics();
+        if (!store!.verifyAggregates().ok) {
+          // Aggregates were verified at open; a later failure is a real
+          // integrity signal and keeps the existing failed semantics.
+          failureCode = 'aggregate-verification-failed'; phase = 'failed'; return;
+        }
+        updatedAt = Date.now();
+      } catch {
+        // The durable aggregates are already served; a background scan failure
+        // is diagnostic only and must not blank a working interface.
+        if (!disposed) failureCode = failureCode ?? 'background-recovery-failed';
+      } finally {
+        scanInProgress = false;
       }
     }
     void initialize();

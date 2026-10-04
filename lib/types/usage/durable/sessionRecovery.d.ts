@@ -24,6 +24,8 @@ interface ReadHandle {
     close(): Promise<void>;
 }
 export interface PersistenceLike {
+    /** Backend identity used only for explicitly supported revision formats. */
+    name?: string;
     list(options?: unknown): Promise<readonly unknown[]>;
     listSnapshots?: (signal?: AbortSignal) => Promise<readonly unknown[]>;
     open?: (id: string, access: 'read', options?: {
@@ -40,9 +42,20 @@ export interface SessionRecoveryResult {
     sessionsReadSuccessfully: number;
     sessionsReadFailed: number;
     sessionsSkippedUnchanged: number;
+    /** Sessions whose previous identical-revision read failed; not re-read this pass. */
+    sessionsSkippedKnownUnreadable: number;
     invalidUsageEvents: number;
     errors: string[];
+    listMs: number;
+    durationMs: number;
 }
+export interface SessionRecoveryOptions {
+    /** How long a remembered failure suppresses an unchanged-source re-read. */
+    retryTtlMs?: number;
+    now?: () => number;
+}
+/** A failed read is not retried for the same revision until this has elapsed. */
+export declare const SESSION_SCAN_RETRY_TTL_MS: number;
 export declare function snapshotLiveSession(session: LiveSessionLike, onInvalidUsage?: () => void): {
     collector: SessionUsageCollector;
     records: UsageRecord[];
@@ -50,5 +63,5 @@ export declare function snapshotLiveSession(session: LiveSessionLike, onInvalidU
     lastSeq: number;
 };
 /** Always closes read handles; records and their checkpoint commit together. */
-export declare function recoverPersistedSessions(store: DurableStore, persistence: PersistenceLike | undefined, signal: AbortSignal): Promise<SessionRecoveryResult>;
+export declare function recoverPersistedSessions(store: DurableStore, persistence: PersistenceLike | undefined, signal: AbortSignal, options?: SessionRecoveryOptions): Promise<SessionRecoveryResult>;
 export {};
