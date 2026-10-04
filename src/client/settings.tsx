@@ -220,8 +220,6 @@ export function TokenUsageSettings({ t }: { t: Translate }): JSX.Element {
 
     {!details && <p className="dtsu-loading">{error ? t('unavailable') : t('loading')}</p>}
     {details && error && <p className="dtsu-error" role="status">{t('unavailable')}{lastUpdated ? ' ' + t('lastUpdated') + ': ' + new Date(lastUpdated).toLocaleTimeString() : ''}</p>}
-    {details?.health?.status === 'partial' && <p className="dtsu-muted" role="status">{t('partialHistory')}</p>}
-    {details?.health && details.health.accountingAdjustment !== 0 && <p className="dtsu-muted" role="status">{t('accountingAdjusted')}: {details.health.accountingAdjustment.toLocaleString()} tokens</p>}
     {details && <>
       <ScopeFilters details={details} filters={filters} setFilters={setFilterState} t={t} />
       <div className="dtsu-metrics-grid">

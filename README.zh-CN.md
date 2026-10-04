@@ -17,9 +17,10 @@ Total       累计
 
 这是社区插件，并非 DeepSeek 官方插件。
 
-**v1.1.9** 修正重试与 fork 会话的核算，改进历史恢复和账本校验，并防止界面显示
-过期范围的数据。详见 [CHANGELOG.md](CHANGELOG.md) 与
-[核算版本 2 的迁移说明](docs/migrations/accounting-v2.md)。
+**v1.1.10** 移除了界面上的两处历史提示：侧边栏与设置页的「部分历史尚未核实」提示，
+以及设置页的「已核实的历史用量调整」提示。覆盖率与调整量数据仍保留在 summary/details
+API 返回值中（`health.status`、`health.accountingAdjustment`），核算、schema、存储与
+HTTP 行为均未改动。详见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 功能
 
@@ -212,17 +213,18 @@ Token 明细单元，包括早期本地版本写出的分日账本，并按规�
 
 ## 兼容性与状态
 
-当前插件版本：**v1.1.9**（npm 包 `@y2zyyr/dsh-token-usage-sidebar`；源码见 GitHub）。
+当前插件版本：**v1.1.10**（npm 包 `@y2zyyr/dsh-token-usage-sidebar`；源码见 GitHub）。
 
 修复后的 host 与 client 已在 DeepSeek Harness Desktop `0.2.0-rc.2` 完成冒烟验证：
 侧边栏与设置页显示、汇总和明细 API、原有账本记录保留及聚合一致性。运行时需提供
 Node 内置 `node:sqlite` 模块和官方 `sessionPersistence` 服务。Cordis peer 范围覆盖
 `4.0.x`；插件不依赖 `@deepseek-ai/dsh-storage-domain`。
 
-早期版本曾验证 DSH `0.1.0-rc.6` 的 `web` profile。1.1.9 的 0.1/0.2 读取适配、
-host 路由与 React 组件已有自动化夹具测试；本次发布尚未重新完成 DSH 0.1 的人工
-冒烟测试。无法读取或短于旧账本的历史日志不会覆盖原有用量，界面会提示部分历史
-尚未核实。历史较多时，首次核验可能需要一定时间。
+早期版本曾验证 DSH `0.1.0-rc.6` 的 `web` profile。DSH 0.1/0.2 的读取适配、host 路由
+与 React 组件已有自动化夹具测试；本次尚未重新完成 DSH 0.1 的人工冒烟测试。无法读取
+或短于旧账本的历史日志不会覆盖原有用量；未核实的历史行仍保留在账本中，并通过 API
+（`health.status`、`health.historicalCoverage`）对外报告，界面不再单独提示。历史较多
+时，首次核验可能需要一定时间。
 
 ### 可靠性保证（v1.1）
 

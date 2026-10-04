@@ -238,13 +238,6 @@ window.__ModuleLoader__.load({
         t("unavailable"),
         lastUpdated ? " " + t("lastUpdated") + ": " + new Date(lastUpdated).toLocaleTimeString() : ""
       ] }),
-      details?.health?.status === "partial" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dtsu-muted", role: "status", children: t("partialHistory") }),
-      details?.health && details.health.accountingAdjustment !== 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { className: "dtsu-muted", role: "status", children: [
-        t("accountingAdjusted"),
-        ": ",
-        details.health.accountingAdjustment.toLocaleString(),
-        " tokens"
-      ] }),
       details && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScopeFilters, { details, filters, setFilters: setFilterState, t }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dtsu-metrics-grid", children: [
@@ -335,15 +328,13 @@ window.__ModuleLoader__.load({
   // src/client/index.tsx
   var import_jsx_runtime2 = __require("react/jsx-runtime");
   var inject = ["slots", "locale", "connection"];
-  var PLUGIN_VERSION = "1.1.9";
+  var PLUGIN_VERSION = "1.1.10";
   var PLUGIN_REPOSITORY_URL = "https://github.com/y2zyyr/dsh-token-usage-sidebar";
   var SETTINGS_NS = "dsh-token-usage-sidebar";
   var settingsLocale = {
     en: {
       unavailable: "Usage data could not be refreshed.",
       lastUpdated: "Last successful update",
-      partialHistory: "Some history could not be verified. Showing confirmed usage.",
-      accountingAdjusted: "Verified historical accounting adjustment",
       nav: "Token Usage",
       title: "Token Usage",
       today: "Today",
@@ -382,14 +373,12 @@ window.__ModuleLoader__.load({
       aboutPlugin: "About this plugin",
       version: "Version",
       aboutDescription: "Persistent local token-usage accounting for DeepSeek Harness.",
-      aboutChanges: "v1.1.9: corrects retry/fork accounting and improves history recovery and data validation.",
+      aboutChanges: "v1.1.10: removes the partial-history and accounting-adjustment notices from the interface.",
       viewOnGithub: "View project on GitHub"
     },
     zh: {
       unavailable: "\u7528\u91CF\u6682\u65F6\u65E0\u6CD5\u66F4\u65B0\u3002",
       lastUpdated: "\u4E0A\u6B21\u6210\u529F\u66F4\u65B0",
-      partialHistory: "\u90E8\u5206\u5386\u53F2\u5C1A\u672A\u6838\u5B9E\uFF0C\u5F53\u524D\u663E\u793A\u5DF2\u786E\u8BA4\u7684\u7528\u91CF\u3002",
-      accountingAdjusted: "\u5DF2\u6838\u5B9E\u7684\u5386\u53F2\u7528\u91CF\u8C03\u6574",
       nav: "Token \u7528\u91CF",
       title: "Token \u7528\u91CF",
       today: "\u4ECA\u5929",
@@ -428,7 +417,7 @@ window.__ModuleLoader__.load({
       aboutPlugin: "\u5173\u4E8E\u63D2\u4EF6",
       version: "\u7248\u672C",
       aboutDescription: "\u4E3A DeepSeek Harness \u63D0\u4F9B\u672C\u5730\u6301\u4E45\u5316 Token \u7528\u91CF\u7EDF\u8BA1\u3002",
-      aboutChanges: "v1.1.9\uFF1A\u4FEE\u6B63\u91CD\u8BD5\u4E0E fork \u6838\u7B97\uFF0C\u6539\u8FDB\u5386\u53F2\u6062\u590D\u548C\u6570\u636E\u6821\u9A8C\u3002",
+      aboutChanges: "v1.1.10\uFF1A\u79FB\u9664\u754C\u9762\u4E0A\u7684\u90E8\u5206\u5386\u53F2\u63D0\u793A\u4E0E\u5386\u53F2\u7528\u91CF\u8C03\u6574\u63D0\u793A\u3002",
       viewOnGithub: "\u5728 GitHub \u67E5\u770B\u9879\u76EE"
     }
   };
@@ -561,8 +550,7 @@ html[data-dsh-desktop=true] .dtsu-w{border-color:transparent}
       connected === false && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "status", style: { fontSize: 10, opacity: 0.7 }, children: [
         t("unavailable"),
         lastUpdated ? " " + t("lastUpdated") + ": " + new Date(lastUpdated).toLocaleTimeString() : ""
-      ] }),
-      connected !== false && summary?.health?.status === "partial" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { role: "status", style: { fontSize: 10, opacity: 0.7 }, children: t("partialHistory") })
+      ] })
     ] });
   }
   function hasSidebarAncestry(button) {

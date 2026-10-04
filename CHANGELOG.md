@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## 1.1.10 — 2026-10-04
+
+### Interface
+- Remove the sidebar and settings "partial history could not be verified" notice and the
+  settings "verified historical accounting adjustment" line, together with their English
+  and Chinese locale keys. Coverage and adjustment figures remain in the summary/details
+  API payloads (`health.status`, `health.accountingAdjustment`); only the on-screen copy
+  changed. Accounting, storage schema, ledger and HTTP behavior are untouched, and
+  existing ledgers need no migration.
+
 ## 1.1.9 — 2026-10-03
 
 ### Accounting and recovery

@@ -110,11 +110,16 @@ test('sidebar ignores an older response and visibly marks a later failed probe',
   } finally { for (const resolve of resolves) resolve(response(undefined, false)); await view.close(); }
 });
 
-test('partial history and verified signed accounting adjustments are visible', async () => {
+test('partial history and accounting adjustment notices are not shown in the settings UI', async () => {
   globalThis.fetch = async (_url, init) => response(details(JSON.parse(init.body).range, 100, 0, { status: 'partial', accountingAdjustment: -100 }));
   const view = await mounted(TokenUsageSettings);
-  try { assert.match(view.container.textContent, /Some history is unverified/); assert.match(view.container.textContent, /Verified adjustment: -100 tokens/); }
-  finally { await view.close(); }
+  try {
+    const text = view.container.textContent;
+    assert.doesNotMatch(text, /Some history is unverified/);
+    assert.doesNotMatch(text, /Verified adjustment/);
+    assert.doesNotMatch(text, /partialHistory|accountingAdjusted/, 'the removed notices must not fall back to their locale keys');
+    assert.match(text, /Total100/, 'usage metrics must still render');
+  } finally { await view.close(); }
 });
 
 test('initial recovery failure renders unavailable state with no fabricated zero totals', async () => {

@@ -17,9 +17,11 @@ Total       …
 
 This is a community plugin, not an official DeepSeek plugin.
 
-**v1.1.9** corrects retry and fork accounting, strengthens historical recovery and
-ledger validation, and prevents stale browser results. See [CHANGELOG.md](CHANGELOG.md)
-and the [accounting v2 migration notes](docs/migrations/accounting-v2.md).
+**v1.1.10** removes the two in-interface history notices: the sidebar and settings
+"partial history could not be verified" line and the settings "verified historical
+accounting adjustment" line. Coverage and adjustment figures stay available in the
+summary/details API payloads (`health.status`, `health.accountingAdjustment`), and no
+accounting, schema, storage or HTTP behavior changed. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 
@@ -250,7 +252,7 @@ The plugin stores accounting metadata needed for reliable totals, such as dedupl
 
 ## Compatibility and Status
 
-Current release: **v1.1.9** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
+Current release: **v1.1.10** (npm package `@y2zyyr/dsh-token-usage-sidebar`; source on GitHub).
 
 The repaired host and client were smoke-tested with DeepSeek Harness Desktop
 `0.2.0-rc.2`: sidebar and settings rendering, summary and detail APIs, preservation of
@@ -258,11 +260,12 @@ existing ledger records, and aggregate integrity. Node's built-in `node:sqlite` 
 the official `sessionPersistence` host service are required. The Cordis peer range
 accepts `4.0.x`; the plugin does not require `@deepseek-ai/dsh-storage-domain`.
 
-Earlier releases were verified with DSH `0.1.0-rc.6` and its `web` profile. The 1.1.9
-DSH 0.1/0.2 adapters, host routes, and React components have automated fixture
-coverage; DSH 0.1 has not had a fresh manual smoke test for this release. Unreadable
-or shorter historical logs do not overwrite existing usage, and the UI reports
-partial history. The first verification pass can take time with a large history.
+Earlier releases were verified with DSH `0.1.0-rc.6` and its `web` profile. The DSH
+0.1/0.2 adapters, host routes, and React components have automated fixture coverage;
+DSH 0.1 has not had a fresh manual smoke test. Unreadable or shorter historical logs
+do not overwrite existing usage; unverifiable rows stay in the ledger and are reported
+through the API (`health.status`, `health.historicalCoverage`) instead of an on-screen
+notice. The first verification pass can take time with a large history.
 
 ### Reliability guarantees (v1.1)
 
